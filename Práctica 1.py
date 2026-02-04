@@ -3,7 +3,7 @@ import sys
 
 pygame.init()
 
-Ancho = 800
+Ancho = 600
 Alto = 600 
 
 pantalla = pygame.display.set_mode((Ancho, Alto))
@@ -19,11 +19,13 @@ ancho_rosa = Ancho // 8
 alto_rosa = Alto // 8
 
 rect_rosa = pygame.Rect(0, 0, ancho_rosa, alto_rosa)
-rect_rosa.center = (Ancho // 8, Alto // 8)
+rect_rosa.center = (Ancho // 2, Alto // 2)
+
 
 #Rectángulo café
 
-rect_cafe = pygame.Rect(Ancho -40, 100, 80, 30)
+rect_cafe = pygame.Rect(0, 0, 80, 30)
+rect_cafe.center = (Ancho, Alto // 2)
 
 while True: 
     for evento in pygame.event.get ():
