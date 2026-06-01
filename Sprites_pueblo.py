@@ -1,1130 +1,847 @@
-import pygame
-import math
-import random
-import heapq
-import csv
-import os
+import pygame, math, random, heapq, csv, os
 
+# Constantes de fase 
+ITEMS_FASE   = {'dia':  ['manzana','naranja','flor','concha','estrella','sol_cristal','flor_dorada'],
+                'noche':['manzana','flor','concha','luna_piedra','estrella_fugaz']}
+ITEMS_VALOR  = {'sol_cristal','flor_dorada','luna_piedra','estrella_fugaz'}
+OFERTAS_DIA  = [{'quiere':'flor','cantidad':2,'da':'sol_cristal'},
+                {'quiere':'manzana','cantidad':3,'da':'flor_dorada'},
+                {'quiere':'naranja','cantidad':2,'da':'sol_cristal'},
+                {'quiere':'estrella','cantidad':1,'da':'flor_dorada'},
+                {'quiere':'concha','cantidad':2,'da':'sol_cristal'}]
+OFERTAS_NOCHE= [{'quiere':'flor','cantidad':2,'da':'luna_piedra'},
+                {'quiere':'manzana','cantidad':2,'da':'luna_piedra'},
+                {'quiere':'concha','cantidad':2,'da':'estrella_fugaz'},
+                {'quiere':'naranja','cantidad':2,'da':'luna_piedra'},
+                {'quiere':'estrella','cantidad':1,'da':'estrella_fugaz'}]
 
-# ==============================================================
-#  Sprite base
-# ==============================================================
+# Sprite base 
 class Sprite():
-    def __init__(self, x, y, w, h, archivo_imagen, pantalla):
-        self.rect     = pygame.Rect(x, y, w, h)
-        self.pantalla = pantalla
-        if archivo_imagen and os.path.exists(str(archivo_imagen)):
-            self.imagen = pygame.image.load(archivo_imagen).convert_alpha()
-        else:
-            self.imagen = pygame.Surface((w, h), pygame.SRCALPHA).convert_alpha()
+    def __init__(self,x,y,w,h,archivo,pantalla):
+        self.rect=pygame.Rect(x,y,w,h); self.pantalla=pantalla
+        self.imagen=(pygame.image.load(archivo).convert_alpha()
+                     if archivo and os.path.exists(str(archivo))
+                     else pygame.Surface((w,h),pygame.SRCALPHA).convert_alpha())
+    def dibujate(self): self.pantalla.blit(self.imagen,self.rect)
+    def getImagen(self): return self.imagen
+    def detectaColisiones(self,other): return self.rect.colliderect(other.rect)
 
-    def dibujate(self):
-        pygame.draw.rect(self.pantalla, (255, 0, 0), self.rect, 1)
-        self.pantalla.blit(self.getImagen(), self.rect)
-
-    def getImagen(self):
-        return self.imagen
-
-    def detectaColisiones(self, other):
-        return self.rect.colliderect(other.rect)
-
-
-# ==============================================================
-#  TileSet base 
-# ==============================================================
+# TileSet base 
 class TileSet(Sprite):
-    def __init__(self, x, y, w, h, archivo_imagen, pantalla,
-                 anchura_tile, altura_tile, personaje):
-        super().__init__(x, y, w, h, archivo_imagen, pantalla)
-        self.anchura_tile    = anchura_tile
-        self.altura_tile     = altura_tile
-        self.num_frames      = int(self.imagen.get_width()  / self.anchura_tile) if self.anchura_tile else 1
-        self.num_animaciones = int(self.imagen.get_height() / self.altura_tile)  if self.altura_tile  else 1
-        self.ImagenesFuenteTile = []
-        self.personaje  = personaje
-        self.tile_padre = None
-        self.mapa       = None
-        self.evaluado   = False
-
+    def __init__(self,x,y,w,h,archivo,pantalla,atw,ath,personaje):
+        super().__init__(x,y,w,h,archivo,pantalla)
+        self.anchura_tile=atw; self.altura_tile=ath
+        self.num_frames     =int(self.imagen.get_width()/atw)  if atw else 1
+        self.num_animaciones=int(self.imagen.get_height()/ath) if ath else 1
+        self.ImagenesFuenteTile=[]; self.personaje=personaje
+        self.tile_padre=self.mapa=None; self.evaluado=False
         for j in range(self.num_animaciones):
-            frames_fila = []
+            row=[]
             for i in range(self.num_frames):
-                s = pygame.Surface(
-                    (self.anchura_tile, self.altura_tile), pygame.SRCALPHA
-                ).convert_alpha()
-                s.blit(self.imagen, (0, 0),
-                       (i * self.anchura_tile, j * self.altura_tile,
-                        self.anchura_tile, self.altura_tile))
-                s = pygame.transform.scale(s, (self.rect.width, self.rect.height))
-                frames_fila.append(s)
-            self.ImagenesFuenteTile.append(frames_fila)
+                s=pygame.Surface((atw,ath),pygame.SRCALPHA).convert_alpha()
+                s.blit(self.imagen,(0,0),(i*atw,j*ath,atw,ath))
+                row.append(pygame.transform.scale(s,(w,h)))
+            self.ImagenesFuenteTile.append(row)
 
-    def getTileXDePosicion(self, pos_x):
-        return int(pos_x / self.rect.width)
-
-    def getTileYDePosicion(self, pos_y):
-        return int(pos_y / self.rect.height)
-
-    def getDistanciaH(self, tile_x, tile_y, tile_destino_x, tile_destino_y):
-        return (abs(tile_x - tile_destino_x) + abs(tile_y - tile_destino_y)) * 10
-
-    def getDistanciaG(self, tile_destino_x, tile_destino_y):
-        return 0
-
-    def getDistanciaF(self, tile_x, tile_y, tile_destino_x, tile_destino_y):
-        self.evaluado = True
-        return (self.getDistanciaG(tile_destino_x, tile_destino_y) +
-                self.getDistanciaH(tile_x, tile_y, tile_destino_x, tile_destino_y))
-
-
-# ==============================================================
-#  Tile
-# ==============================================================
 class Tile():
-    def __init__(self, x, y, w, h, tipo, imagen, mapa=None):
-        self.rect   = pygame.Rect(x, y, w, h)
-        self.tipo   = tipo
-        self.imagen = imagen
-        self.mapa   = mapa
-        self.tile_x = int(x / w) if w else 0
-        self.tile_y = int(y / h) if h else 0
-
-    def distanciaA(self, tile_destino_x, tile_destino_y):
-        return math.hypot(self.tile_x - tile_destino_x,
-                          self.tile_y - tile_destino_y)
-
-    def distanciaG(self, tile_destino_x, tile_destino_y):
-        dx = abs(self.tile_x - tile_destino_x)
-        dy = abs(self.tile_y - tile_destino_y)
-        if dx == 1 and dy == 1:
-            return 14
-        if (dx == 1 and dy == 0) or (dx == 0 and dy == 1):
-            return 10
-        return 0
-
-    def distanciaF(self, tile_destino_x, tile_destino_y):
-        return (math.hypot(self.tile_x - tile_destino_x,
-                           self.tile_y - tile_destino_y) +
-                (abs(self.tile_x - tile_destino_x) +
-                 abs(self.tile_y - tile_destino_y)) * 10)
-
+    def __init__(self,x,y,w,h,tipo,imagen):
+        self.rect=pygame.Rect(x,y,w,h); self.tipo=tipo; self.imagen=imagen
+        self.tile_x=x//w if w else 0; self.tile_y=y//h if h else 0
     @property
-    def tile_actual(self):
-        return (self.tile_x, self.tile_y)
+    def tile_actual(self): return (self.tile_x,self.tile_y)
 
+# SpritesExterior 
+class SpritesExterior:
+    # Coordenadas de cada árbol en arboles.png (968x432, fondo negro)
+    COORDS_ARBOLES = {
+        'arbol_1': (0,   76,  250, 376),
+        'arbol_2': (262, 63,  514, 382),
+        'arbol_3': (547, 125, 758, 390),
+        'arbol_4': (788, 68,  953, 368),
+    }
+    # Coordenadas de rocas grandes en piedras.png (478x188, fondo negro)
+    COORDS_ROCAS = {
+        'roca_1': (2,   4,  151, 177),
+        'roca_2': (191, 4,  339, 167),
+        'roca_3': (364, 49, 472, 173),
+    }
+    # Coordenadas de piedritas en piedritas.png (622x164, fondo negro)
+    COORDS_PIEDRITAS = {
+        'piedrita_1': (17,  17, 106, 102),
+        'piedrita_2': (123,  1, 207, 163),
+        'piedrita_3': (209, 12, 285, 155),
+        'piedrita_4': (297, 17, 366, 149),
+    }
 
-# ==============================================================
-#  TileSetPueblo
-#  Tipos de tile:
-#    0 = hierba   (libre)
-#    1 = camino   (costo x2 en A*, más lento)
-#    2 = árbol    (obstáculo sólido)
-#    3 = agua     (obstáculo sólido)
-#    4 = flores   (libre, decorativo)
-# ==============================================================
+    ARBOLES    = ['arbol_1', 'arbol_2', 'arbol_3', 'arbol_4']
+    ROCAS      = ['roca_1',  'roca_2',  'roca_3']
+    PIEDRITAS  = ['piedrita_1', 'piedrita_2', 'piedrita_3', 'piedrita_4']
+
+    def __init__(self, archivo='exterior.png', pantalla=None,
+                 archivo_arboles='arboles.png',
+                 archivo_piedras='piedras.png',
+                 archivo_piedritas='piedritas.png',
+                 archivo_casa='casa.png',
+                 archivo_puente='puente.png'):
+        self.pantalla = pantalla
+        self.cache    = {}
+        self.sprites  = {}   # todos los sprites cargados
+
+        def _cargar_png(ruta, nombre_log):
+            """Carga PNG con fondo negro → transparente."""
+            if not os.path.exists(ruta):
+                print(f'[SpritesExterior] No encontrado: {ruta}')
+                return None
+            s = pygame.image.load(ruta).convert_alpha()
+            s.set_colorkey((0, 0, 0))
+            s = s.convert_alpha()
+            print(f'[SpritesExterior] {nombre_log} {s.get_size()}')
+            return s
+
+        def _recortar(surf, x0, y0, x1, y1):
+            w, h = x1-x0, y1-y0
+            r = pygame.Surface((w, h), pygame.SRCALPHA)
+            r.blit(surf, (0,0), (x0, y0, w, h))
+            return r
+
+        # Árboles
+        src = _cargar_png(archivo_arboles, f'arboles.png')
+        if src:
+            for nombre, coords in self.COORDS_ARBOLES.items():
+                self.sprites[nombre] = _recortar(src, *coords)
+
+        # Rocas grandes
+        src = _cargar_png(archivo_piedras, 'piedras.png')
+        if src:
+            for nombre, coords in self.COORDS_ROCAS.items():
+                self.sprites[nombre] = _recortar(src, *coords)
+
+        # Piedritas pequeñas
+        src = _cargar_png(archivo_piedritas, 'piedritas.png')
+        if src:
+            for nombre, coords in self.COORDS_PIEDRITAS.items():
+                self.sprites[nombre] = _recortar(src, *coords)
+
+        # Casa 
+        src = _cargar_png(archivo_casa, 'casa.png')
+        if src:
+            self.sprites['casa'] = src
+
+        # Puente 
+        src = _cargar_png(archivo_puente, 'puente.png')
+        if src:
+            self.sprites['puente'] = src
+
+        print(f'[SpritesExterior] Total sprites: {list(self.sprites.keys())}')
+
+    def get(self, nombre, tam_px):
+        """Devuelve sprite escalado manteniendo proporción (alto=tam_px)."""
+        clave = (nombre, tam_px)
+        if clave in self.cache:
+            return self.cache[clave]
+        if nombre not in self.sprites:
+            return pygame.Surface((tam_px, tam_px), pygame.SRCALPHA)
+        src    = self.sprites[nombre]
+        sw, sh = src.get_size()
+        ratio  = tam_px / max(sh, 1)
+        new_w  = max(1, int(sw * ratio))
+        out    = pygame.transform.scale(src, (new_w, tam_px))
+        self.cache[clave] = out
+        return out
+
+    def dibujar(self, nombre, pantalla, sx, sy, tam_px):
+        pantalla.blit(self.get(nombre, tam_px), (sx, sy))
+
+# TileSetPueblo 
+# Tipos tile:
+#   0=hierba  1=camino  2=árbol(obstáculo/talable)
+#   3=agua    4=flores  5=roca grande(mucha piedra)
+#   6=piedrita pequeña (poca piedra)
 class TileSetPueblo(TileSet):
-    def __init__(self, x, y, w, h, archivo_imagen, pantalla,
-                 anchura_tile, altura_tile, personaje,
-                 archivo_csv=None):
-        super().__init__(x, y, w, h, archivo_imagen, pantalla,
-                         anchura_tile, altura_tile, personaje)
-        self.Tiles       = []
-        self.obstaculos  = []
-        self.mapa_celdas = {}
+    def __init__(self,x,y,w,h,archivo,pantalla,atw,ath,personaje,
+                 archivo_csv=None, gestor_spr=None):
+        super().__init__(x,y,w,h,archivo,pantalla,atw,ath,personaje)
+        self.Tiles=[]; self.obstaculos=[]; self.mapa_celdas={}
+        self.water_positions=[]
+        self.gestor_spr=gestor_spr
+        self.sprites_mundo = {}   # (tx,ty) → nombre_sprite
         self.imagen_mapa = self._construir_mapa(archivo_csv)
 
-    # ----------------------------------------------------------
     def dibujate(self):
-        self.pantalla.blit(
-            self.getImagen(),
-            (-int(self.personaje.camara_x), -int(self.personaje.camara_y))
-        )
+        self.pantalla.blit(self.imagen_mapa,
+                           (-int(self.personaje.camara_x),
+                            -int(self.personaje.camara_y)))
+    def getImagen(self): return self.imagen_mapa
+    def get_obstaculos(self): return self.obstaculos
+    def get_mapa_celdas(self): return self.mapa_celdas
 
-    def getImagen(self):
-        return self.imagen_mapa
+    # Sprites grandes encima del mapa
+    def dibujate_sprites_exteriores(self, pantalla, camara_x, camara_y):
+        if not self.gestor_spr or not self.gestor_spr.sprites:
+            return
+        tw = self.rect.width
+        TAM = tw * 2   # 64px — tamaño base de árbol/roca en pantalla
+        sw, sh = pantalla.get_width(), pantalla.get_height()
+        for (tx,ty), nombre in self.sprites_mundo.items():
+            sx = tx*tw - int(camara_x)
+            sy = ty*tw - int(camara_y)
+            if sx > sw+TAM or sx < -TAM or sy > sh+TAM or sy < -TAM:
+                continue
+            pantalla.blit(self.gestor_spr.get(nombre, TAM), (sx, sy))
 
-    def get_obstaculos(self):
-        return self.obstaculos
+    # Agua animada 
+    def dibujate_agua_dinamica(self, pantalla, camara_x, camara_y, tiempo_dia):
+        """Overlay de color animado SOLO sobre tiles tipo 3 (agua real)."""
+        c=self._get_agua_color(tiempo_dia)
+        tw=self.rect.width; sw,sh=pantalla.get_width(),pantalla.get_height()
+        surf=pygame.Surface((tw,tw),pygame.SRCALPHA); surf.fill((*c,115))
+        for wx,wy in self.water_positions:
+            sx=wx-int(camara_x); sy=wy-int(camara_y)
+            if -tw<sx<sw+tw and -tw<sy<sh+tw:
+                pantalla.blit(surf,(sx,sy))
 
-    def get_mapa_celdas(self):
-        return self.mapa_celdas
+    def _get_agua_color(self,t):
+        fases=[(0,(12,38,90)),(500,(35,105,180)),(1200,(42,142,220)),
+               (4500,(28,85,145)),(5200,(16,52,110)),(5600,(12,38,90))]
+        for k in range(len(fases)-1):
+            t0,c0=fases[k]; t1,c1=fases[k+1]
+            if t0<=t<t1:
+                a=(t-t0)/(t1-t0)
+                return tuple(int(c0[i]+(c1[i]-c0[i])*a) for i in range(3))
+        return fases[0][1]
 
-    #  helpers visuales 
+    # Talar / minar
+    def modificar_tile(self, tile_x, tile_y):
+        tw = self.rect.width
+        for dy in range(-1, 3):
+            ny = tile_y + dy
+            if 0<=ny<len(self.Tiles) and 0<=tile_x<len(self.Tiles[ny]):
+                if self.mapa_celdas.get((tile_x, ny), 0) in (2, 5, 6):
+                    self.imagen_mapa.blit(self._tile_hierba(), (tile_x*tw, ny*tw))
+                    self.mapa_celdas[(tile_x, ny)] = 0
+        for dy in range(-1, 2):
+            for dx in range(-1, 2):
+                k = (tile_x+dx, tile_y+dy)
+                if k in self.sprites_mundo:
+                    del self.sprites_mundo[k]
+        area = pygame.Rect(tile_x*tw - tw, tile_y*tw - tw, tw*3, tw*4)
+        nuevos = [o for o in self.obstaculos if not area.colliderect(o)]
+        self.obstaculos.clear()
+        self.obstaculos.extend(nuevos)
 
+    def tile_cercano_interactuable(self, personaje):
+        mx,my=personaje.get_pos_mundo(); tw=self.rect.width
+        btx,bty=int(mx/tw),int(my/tw)
+        for dx in range(-2,3):
+            for dy in range(-2,3):
+                tx,ty=btx+dx,bty+dy
+                tipo=self.mapa_celdas.get((tx,ty),0)
+                if tipo in (2,5,6): return (tipo,tx,ty)
+        return (None,None,None)
+
+    def crecer_arbol_aleatorio(self):
+        tw=self.rect.width; nc=5000//tw; nf=5000//tw
+        for _ in range(40):
+            i=random.randint(5,nc-6); j=random.randint(5,nf-6)
+            if self.mapa_celdas.get((i,j),0)!=0: continue
+            if j+1>=nf or self.mapa_celdas.get((i,j+1),0)!=0: continue
+            if 2100<=i*tw<=2700 and 2100<=j*tw<=2700: continue
+            self.Tiles[j][i].tipo=2; self.Tiles[j][i].imagen=self._tile_arbol_copa()
+            self.Tiles[j+1][i].tipo=2; self.Tiles[j+1][i].imagen=self._tile_arbol_tronco()
+            self.imagen_mapa.blit(self._tile_arbol_copa(), (i*tw,j*tw))
+            self.imagen_mapa.blit(self._tile_arbol_tronco(),(i*tw,(j+1)*tw))
+            self.mapa_celdas[(i,j)]=2; self.mapa_celdas[(i,j+1)]=2
+            nombre=SpritesExterior.ARBOLES[(i*31+j*17)%4]
+            self.sprites_mundo[(i,j)]=nombre
+            self.obstaculos.append(pygame.Rect(i*tw,j*tw,tw,tw*2))
+            return True
+        return False
+
+    # Tiles base 
     def _tile_hierba(self):
-        """Tile de hierba reutilizando filas 8-9 del Arena_Tileset."""
-        s = pygame.Surface((self.rect.width, self.rect.height), pygame.SRCALPHA).convert_alpha()
-        if self.num_animaciones > 9:
-            fila    = random.randint(8, 9)
-            columna = random.randint(0, min(9, self.num_frames - 1))
-            s.blit(self.ImagenesFuenteTile[fila][columna], (0, 0))
-        else:
-            s.fill((80, 160, 60))
-            for _ in range(4):
-                gx = random.randint(0, self.rect.width  - 2)
-                gy = random.randint(0, self.rect.height - 2)
-                pygame.draw.line(s, (60, 140, 45), (gx, gy), (gx, gy - 4), 1)
+        s=pygame.Surface((self.rect.width,self.rect.width),pygame.SRCALPHA).convert_alpha()
+        if self.num_animaciones>9:
+            s.blit(self.ImagenesFuenteTile[random.randint(8,9)]
+                   [random.randint(0,min(9,self.num_frames-1))],(0,0))
+        else: s.fill((80,158,62))
         return s
 
     def _tile_camino(self):
-        """Camino de tierra usando filas 13-16 o generado con código."""
-        s = pygame.Surface((self.rect.width, self.rect.height), pygame.SRCALPHA).convert_alpha()
-        if self.num_animaciones > 13:
-            fila    = random.randint(13, min(16, self.num_animaciones - 1))
-            columna = random.randint(0, min(2, self.num_frames - 1))
-            s.blit(self.ImagenesFuenteTile[fila][columna], (0, 0))
-        else:
-            s.fill((160, 128, 90))
-            for _ in range(5):
-                px = random.randint(0, self.rect.width  - 3)
-                py = random.randint(0, self.rect.height - 3)
-                pygame.draw.rect(s, (140, 110, 78), (px, py, 3, 3))
+        s=pygame.Surface((self.rect.width,self.rect.width),pygame.SRCALPHA).convert_alpha()
+        if self.num_animaciones>13:
+            s.blit(self.ImagenesFuenteTile[random.randint(13,min(16,self.num_animaciones-1))]
+                   [random.randint(0,min(2,self.num_frames-1))],(0,0))
+        else: s.fill((158,128,90))
         return s
 
     def _tile_flores(self):
-        """Hierba con manchas de flores de colores."""
-        s = self._tile_hierba()
-        colores = [(255, 80, 140), (255, 220, 30), (200, 90, 255), (255, 140, 40)]
-        for _ in range(random.randint(2, 4)):
-            fx = random.randint(5, self.rect.width  - 5)
-            fy = random.randint(5, self.rect.height - 5)
-            c  = random.choice(colores)
-            pygame.draw.circle(s, c,             (fx, fy), 3)
-            pygame.draw.circle(s, (255, 255, 200), (fx, fy), 1)
-        return s
-
-    def _tile_arbol_copa(self):
-        """Parte superior del árbol"""
-        s = pygame.Surface((self.rect.width, self.rect.height), pygame.SRCALPHA).convert_alpha()
-        s.blit(self._tile_hierba(), (0, 0))
-        cx, cy = self.rect.width // 2, self.rect.height // 2
-        for radio, color in [(14, (25, 120, 30)), (11, (35, 150, 40)), (8, (50, 170, 55))]:
-            pygame.draw.circle(s, color, (cx, cy), radio)
-        return s
-
-    def _tile_arbol_tronco(self):
-        """Parte inferior del árbol — tronco marrón."""
-        s = pygame.Surface((self.rect.width, self.rect.height), pygame.SRCALPHA).convert_alpha()
-        s.blit(self._tile_hierba(), (0, 0))
-        cx     = self.rect.width // 2
-        tw, th = max(6, self.rect.width // 5), self.rect.height // 2
-        pygame.draw.rect(s, (100, 65, 30), (cx - tw // 2, 0, tw, th))
-        pygame.draw.rect(s, (125, 82, 42), (cx - tw // 2 + 2, 0, 3, th))
+        s=self._tile_hierba()
+        for _ in range(random.randint(2,4)):
+            pygame.draw.circle(s,random.choice([(255,80,140),(255,220,30),(200,90,255)]),
+                               (random.randint(4,self.rect.width-4),
+                                random.randint(4,self.rect.width-4)),3)
         return s
 
     def _tile_agua(self):
-        """Tile de lago azul con líneas de onda."""
-        s = pygame.Surface((self.rect.width, self.rect.height), pygame.SRCALPHA).convert_alpha()
-        s.fill((55, 155, 220))
-        for i in range(0, self.rect.width, 8):
-            pygame.draw.line(s, (90, 185, 245),
-                             (i,     self.rect.height // 3),
-                             (i + 4, self.rect.height // 3), 1)
-            pygame.draw.line(s, (90, 185, 245),
-                             (i + 2, self.rect.height * 2 // 3),
-                             (i + 6, self.rect.height * 2 // 3), 1)
+        tw=self.rect.width
+        s=pygame.Surface((tw,tw),pygame.SRCALPHA).convert_alpha()
+        s.fill((42,142,220))
+        for i in range(0,tw,8):
+            pygame.draw.line(s,(80,170,245),(i,tw//3),(i+4,tw//3),1)
         return s
 
-    # CSV 
-    def _leer_csv(self, archivo_csv):
-        if not os.path.exists(archivo_csv):
-            print(f"[AVISO] '{archivo_csv}' no encontrado — generando mapa procedural.")
-            return []
-        mapa = []
-        with open(archivo_csv, newline='', encoding='utf-8') as f:
-            reader = csv.reader(f)
-            for fila in reader:
-                vals = [int(v) for v in fila if v.strip() != '']
-                if vals:
-                    mapa.append(vals)
-        print(f"[CSV] Mapa cargado: {len(mapa)} filas x {len(mapa[0]) if mapa else 0} cols")
+    def _tile_arbol_copa(self):
+        return self._tile_hierba()
+
+    def _tile_arbol_tronco(self):
+        return self._tile_hierba()
+
+    def _tile_monte(self):
+        return self._tile_hierba()
+
+    def _leer_csv(self,f):
+        if not os.path.exists(f): return []
+        mapa=[]
+        with open(f,newline='',encoding='utf-8') as fp:
+            for fila in csv.reader(fp):
+                vals=[int(v) for v in fila if v.strip()!='']
+                if vals: mapa.append(vals)
         return mapa
 
-    # construcción principal
     def _construir_mapa(self, archivo_csv=None):
-        tw = self.rect.width
-        th = self.rect.height
-        ANCHO_MAPA = 5000
-        ALTO_MAPA  = 5000
-        num_col    = ANCHO_MAPA // tw + 1
-        num_fil    = ALTO_MAPA  // th + 1
-
-        superficie = pygame.Surface(
-            (ANCHO_MAPA, ALTO_MAPA), pygame.SRCALPHA
-        ).convert_alpha()
-
-        mapa_csv = []
-        if archivo_csv:
-            mapa_csv = self._leer_csv(archivo_csv)
-
-        # Paso 1: llenar toda la cuadrícula con hierba base
-        for j in range(num_fil):
-            fila_tiles = []
-            for i in range(num_col):
-                if mapa_csv and j < len(mapa_csv) and i < len(mapa_csv[j]):
-                    tipo = mapa_csv[j][i]
-                else:
-                    tipo = 0
-                self.mapa_celdas[(i, j)] = tipo
-                img = self._tile_hierba() if tipo == 0 else self._tile_camino()
-                fila_tiles.append(Tile(i * tw, j * th, tw, th, tipo, img))
-            self.Tiles.append(fila_tiles)
-
-        # Paso 2: si no hay CSV, generar elementos del pueblo
+        tw=self.rect.width; ANCHO=ALTO=5000
+        nc=ANCHO//tw+1; nf=ALTO//tw+1
+        sup=pygame.Surface((ANCHO,ALTO),pygame.SRCALPHA).convert_alpha()
+        mapa_csv=self._leer_csv(archivo_csv) if archivo_csv else []
+        for j in range(nf):
+            fila=[]
+            for i in range(nc):
+                tipo=(mapa_csv[j][i] if mapa_csv and j<len(mapa_csv) and i<len(mapa_csv[j]) else 0)
+                self.mapa_celdas[(i,j)]=tipo
+                img=self._tile_hierba() if tipo==0 else self._tile_camino()
+                fila.append(Tile(i*tw,j*tw,tw,tw,tipo,img))
+            self.Tiles.append(fila)
         if not mapa_csv:
-            self._generar_caminos(num_col, num_fil)
-            self._generar_bosques(num_col, num_fil, tw, th)
-            self._generar_lago(num_col, num_fil, tw, th)
-            self._generar_flores(num_col, num_fil)
-
-        # Paso 3: blit final al surface del mapa
+            self._generar_caminos(nc,nf,tw)
+            self._generar_bosques(nc,nf,tw)
+            self._generar_lago(nc,nf,tw)
+            self._generar_flores(nc,nf)
+            self._generar_montes(nc,nf,tw)
         for fila in self.Tiles:
-            for tile in fila:
-                superficie.blit(tile.imagen, tile.rect)
+            for tile in fila: sup.blit(tile.imagen,tile.rect)
+        return sup
 
-        return superficie
+    def _generar_caminos(self,nc,nf,tw):
+        # Camino horizontal y vertical — libres para caminar
+        for i in range(nc):
+            for dy in range(-1,2):
+                j=nf//2+dy
+                if 0<=j<nf:
+                    self.Tiles[j][i].tipo=1; self.Tiles[j][i].imagen=self._tile_camino()
+                    self.mapa_celdas[(i,j)]=1
+        for j in range(nf):
+            for dx in range(-1,2):
+                i=nc//2+dx
+                if 0<=i<nc:
+                    self.Tiles[j][i].tipo=1; self.Tiles[j][i].imagen=self._tile_camino()
+                    self.mapa_celdas[(i,j)]=1
 
-    def _generar_caminos(self, num_col, num_fil):
-        """Cruz central de caminos de tierra."""
-        cy = num_fil // 2
-        cx = num_col // 2
-        for i in range(num_col):
-            for dy in range(-1, 2):
-                j = cy + dy
-                if 0 <= j < num_fil:
-                    self.Tiles[j][i].tipo    = 1
-                    self.Tiles[j][i].imagen  = self._tile_camino()
-                    self.mapa_celdas[(i, j)] = 1
-        for j in range(num_fil):
-            for dx in range(-1, 2):
-                i = cx + dx
-                if 0 <= i < num_col:
-                    self.Tiles[j][i].tipo    = 1
-                    self.Tiles[j][i].imagen  = self._tile_camino()
-                    self.mapa_celdas[(i, j)] = 1
+    def _generar_bosques(self,nc,nf,tw):
+        stx,sty=2400//tw,2400//tw; safe=12
+        centros=[(nc//5,nf//5),(nc*4//5,nf//5),(nc//5,nf*4//5),
+                 (nc*4//5,nf*4//5),(nc//3,nf//2+20),(nc*2//3,nf//3)]
+        for bcx,bcy in centros:
+            if abs(bcx-stx)<safe and abs(bcy-sty)<safe: continue
+            r=random.randint(4,7)
+            for dj in range(-r,r+1):
+                for di in range(-r,r+1):
+                    if di*di+dj*dj>r*r: continue
+                    i,j=bcx+di,bcy+dj
+                    if not(1<=i<nc-2 and 1<=j<nf-3): continue
+                    if self.mapa_celdas.get((i,j),0) in(1,2): continue
+                    self.Tiles[j][i].tipo=2; self.Tiles[j][i].imagen=self._tile_arbol_copa()
+                    self.mapa_celdas[(i,j)]=2
+                    if j+1<nf:
+                        self.Tiles[j+1][i].tipo=2; self.Tiles[j+1][i].imagen=self._tile_arbol_tronco()
+                        self.mapa_celdas[(i,j+1)]=2
+                    # 1 sprite por árbol, en la celda de copa
+                    nombre=SpritesExterior.ARBOLES[(i*31+j*17)%4]
+                    self.sprites_mundo[(i,j)]=nombre
+                    self.obstaculos.append(pygame.Rect(i*tw,j*tw,tw,tw*2))
 
-    def _generar_bosques(self, num_col, num_fil, tw, th):
-        """Grupos de árboles en las esquinas y lados del mapa."""
-        spawn_tx  = 2400 // tw
-        spawn_ty  = 2400 // th
-        zona_safe = 12
+    def _generar_lago(self,nc,nf,tw):
+        pass  # Sin lago
 
-        centros = [
-            (num_col // 5,         num_fil // 5),
-            (num_col * 4 // 5,     num_fil // 5),
-            (num_col // 5,         num_fil * 4 // 5),
-            (num_col * 4 // 5,     num_fil * 4 // 5),
-            (num_col // 3,         num_fil // 2 + 20),
-            (num_col * 2 // 3,     num_fil // 3),
-        ]
+    def abrir_paso_rio(self, mundo_x, mundo_y, ancho_px=128):
+        """Elimina obstáculos de agua en la zona donde se colocó el puente."""
+        tw = self.rect.width
+        zona = pygame.Rect(int(mundo_x)-ancho_px//2, int(mundo_y)-ancho_px//2,
+                           ancho_px, ancho_px)
+        nuevos = []
+        for o in self.obstaculos:
+            tx,ty = o.x//tw, o.y//tw
+            if self.mapa_celdas.get((tx,ty),0)==3 and zona.colliderect(o):
+                continue   # tile de agua bajo el puente
+            nuevos.append(o)
+        self.obstaculos.clear()
+        self.obstaculos.extend(nuevos)
 
-        for (bcx, bcy) in centros:
-            if abs(bcx - spawn_tx) < zona_safe and abs(bcy - spawn_ty) < zona_safe:
-                continue
-            radio = random.randint(4, 7)
-            for dj in range(-radio, radio + 1):
-                for di in range(-radio, radio + 1):
-                    if di * di + dj * dj > radio * radio:
-                        continue
-                    i, j = bcx + di, bcy + dj
-                    if not (1 <= i < num_col - 1 and 1 <= j < num_fil - 2):
-                        continue
-                    if self.mapa_celdas.get((i, j), 0) == 1:
-                        continue
-
-                    self.Tiles[j][i].tipo    = 2
-                    self.Tiles[j][i].imagen  = self._tile_arbol_copa()
-                    self.mapa_celdas[(i, j)] = 2
-                    if j + 1 < num_fil:
-                        self.Tiles[j+1][i].tipo    = 2
-                        self.Tiles[j+1][i].imagen  = self._tile_arbol_tronco()
-                        self.mapa_celdas[(i, j+1)] = 2
-                    self.obstaculos.append(
-                        pygame.Rect(i * tw, j * th, tw, th * 2)
-                    )
-
-    def _generar_lago(self, num_col, num_fil, tw, th):
-        """Lago elíptico en el cuadrante noreste."""
-        lago_cx = num_col * 3 // 4
-        lago_cy = num_fil // 4
-        rx, ry  = 9, 7
-
-        for dj in range(-ry, ry + 1):
-            for di in range(-rx, rx + 1):
-                if (di / rx) ** 2 + (dj / ry) ** 2 > 1.0:
-                    continue
-                i, j = lago_cx + di, lago_cy + dj
-                if not (0 <= i < num_col and 0 <= j < num_fil):
-                    continue
-                self.Tiles[j][i].tipo    = 3
-                self.Tiles[j][i].imagen  = self._tile_agua()
-                self.mapa_celdas[(i, j)] = 3
-
-        self.obstaculos.append(
-            pygame.Rect((lago_cx - rx) * tw, (lago_cy - ry) * th,
-                        rx * 2 * tw,          ry * 2 * th)
-        )
-
-    def _generar_flores(self, num_col, num_fil):
-        """Parches de flores dispersos por el mapa (tipo 4, pisables)."""
+    def _generar_flores(self,nc,nf):
         for _ in range(100):
-            i = random.randint(2, num_col - 3)
-            j = random.randint(2, num_fil - 3)
-            if self.mapa_celdas.get((i, j), 0) == 0:
-                self.Tiles[j][i].tipo    = 4
-                self.Tiles[j][i].imagen  = self._tile_flores()
-                self.mapa_celdas[(i, j)] = 4
+            i,j=random.randint(2,nc-3),random.randint(2,nf-3)
+            if self.mapa_celdas.get((i,j),0)==0:
+                self.Tiles[j][i].tipo=4; self.Tiles[j][i].imagen=self._tile_flores()
+                self.mapa_celdas[(i,j)]=4
 
-    def getTileActual(self):
-        px, py = self.personaje.get_pos_mundo()
-        x = max(0, min(int(px / self.rect.width),  len(self.Tiles[0]) - 1))
-        y = max(0, min(int(py / self.rect.height), len(self.Tiles)    - 1))
-        return self.Tiles[y][x]
+    def _generar_montes(self,nc,nf,tw):
+        # Tipo 5: rocas grandes — más difíciles
+        for _ in range(25):
+            i,j=random.randint(3,nc-4),random.randint(3,nf-4)
+            if self.mapa_celdas.get((i,j),0)==0:
+                self.Tiles[j][i].tipo=5; self.Tiles[j][i].imagen=self._tile_monte()
+                self.mapa_celdas[(i,j)]=5
+                nombre=SpritesExterior.ROCAS[(i*13+j*7)%len(SpritesExterior.ROCAS)]
+                self.sprites_mundo[(i,j)]=nombre
+        # Tipo 6: piedritas pequeñas — fáciles de minar
+        for _ in range(35):
+            i,j=random.randint(3,nc-4),random.randint(3,nf-4)
+            if self.mapa_celdas.get((i,j),0)==0:
+                self.Tiles[j][i].tipo=6; self.Tiles[j][i].imagen=self._tile_monte()
+                self.mapa_celdas[(i,j)]=6
+                nombre=SpritesExterior.PIEDRITAS[(i*17+j*11)%len(SpritesExterior.PIEDRITAS)]
+                self.sprites_mundo[(i,j)]=nombre
 
 
-# ==============================================================
-#  Sprite Animado 
-# ==============================================================
+# SpriteAnimado 
 class SpriteAnimado(TileSet):
-    def __init__(self, x, y, w, h, archivo_imagen, pantalla,
-                 anchura_tile, altura_tile, personaje):
-        super().__init__(x, y, w, h, archivo_imagen, pantalla,
-                         anchura_tile, altura_tile, personaje)
-        self.animacion       = 1
-        self.frame           = 0
-        self.cont_frames     = 0
-        self.max_cont_frames = 25
-        self.estado          = 0
-
-    def setMaxContFrames(self, vel):
-        v = max(1, abs(vel))
-        self.max_cont_frames = max(1, min(25, int(40 / v)))
+    def __init__(self,x,y,w,h,a,p,atw,ath,personaje):
+        super().__init__(x,y,w,h,a,p,atw,ath,personaje)
+        self.animacion=1;self.frame=0;self.cont_frames=0;self.max_cont_frames=25;self.estado=0
+    def setMaxContFrames(self,vel):
+        v=max(1,abs(vel));self.max_cont_frames=max(1,min(25,int(40/v)))
 
 
-# ==============================================================
-#  Item  —  (manzanas, flores, conchas, estrellas de mar, naranjas)
-# ==============================================================
+# Item 
 class Item():
-    COLORES = {
-        'manzana':  (210,  45,  45),
-        'naranja':  (255, 145,   0),
-        'flor':     (255,  80, 175),
-        'concha':   (240, 215, 165),
-        'estrella': (255, 225,  30),
-    }
-
-    def __init__(self, x, y, tipo='manzana'):
-        self.rect     = pygame.Rect(x, y, 24, 24)
-        self.tipo     = tipo
-        self.recogido = False
-        self._brillo      = 0
-        self._dir_brillo  = 1
-
+    COLORES={'manzana':(210,45,45),'naranja':(255,145,0),'flor':(255,80,175),
+             'concha':(240,215,165),'estrella':(255,225,30),'sol_cristal':(255,200,0),
+             'flor_dorada':(255,180,0),'luna_piedra':(200,210,255),'estrella_fugaz':(180,230,255)}
+    def __init__(self,x,y,tipo='manzana',fase='ambas'):
+        self.rect=pygame.Rect(x,y,26,26);self.tipo=tipo;self.fase=fase
+        self.recogido=False;self._brillo=0;self._dir=1
     def actualizar(self):
-        """Pequeña animación de brillo para llamar la atención"""
-        self._brillo += self._dir_brillo * 2
-        if self._brillo >= 40 or self._brillo <= 0:
-            self._dir_brillo *= -1
-
-    def dibujate(self, pantalla, camara_x, camara_y):
-        if self.recogido:
-            return
-        sx = self.rect.x - int(camara_x)
-        sy = self.rect.y - int(camara_y)
-
-        # Sombra
-        pygame.draw.ellipse(pantalla, (0, 0, 0),
-                            (sx + 4, sy + 19, 16, 5))
-
-        c = self.COLORES.get(self.tipo, (255, 255, 255))
-
-        if self.tipo in ('manzana', 'naranja'):
-            pygame.draw.circle(pantalla, c,                    (sx + 12, sy + 12), 8)
-            pygame.draw.circle(pantalla, tuple(min(255, v+60) for v in c), (sx + 9, sy + 9), 3)
-            pygame.draw.line(pantalla, (50, 110, 30), (sx + 12, sy + 4), (sx + 12, sy), 2)
-
-        elif self.tipo == 'flor':
-            for ang in range(0, 360, 72):
-                r  = math.radians(ang)
-                px = sx + 12 + int(math.cos(r) * 6)
-                py = sy + 12 + int(math.sin(r) * 6)
-                pygame.draw.circle(pantalla, c, (px, py), 4)
-            pygame.draw.circle(pantalla, (255, 240, 100), (sx + 12, sy + 12), 4)
-
-        elif self.tipo == 'concha':
-            pygame.draw.ellipse(pantalla, c, (sx + 2, sy + 6, 20, 12))
-            for k in range(3):
-                pygame.draw.arc(pantalla, (200, 180, 130),
-                                (sx + 2 + k*4, sy + 6, 20 - k*4, 12),
-                                0, math.pi, 1)
-
-        elif self.tipo == 'estrella':
-            pts = []
-            for k in range(10):
-                ang = math.radians(k * 36 - 90)
-                r   = 9 if k % 2 == 0 else 4
-                pts.append((sx + 12 + int(math.cos(ang) * r),
-                             sy + 12 + int(math.sin(ang) * r)))
-            pygame.draw.polygon(pantalla, c, pts)
-
-        # Halo de brillo
-        if self._brillo > 8:
-            glow = pygame.Surface((24, 24), pygame.SRCALPHA)
-            pygame.draw.circle(glow, (255, 255, 255, self._brillo),
-                               (12, 12), 11)
-            pantalla.blit(glow, (sx, sy))
+        self._brillo+=self._dir*2
+        if self._brillo>=50 or self._brillo<=0:self._dir*=-1
+    def dibujate(self,pantalla,cx,cy,fase_actual='dia'):
+        if self.recogido:return
+        sx,sy=self.rect.x-int(cx),self.rect.y-int(cy)
+        c=self.COLORES.get(self.tipo,(255,255,255))
+        en_fase=(self.fase=='ambas' or self.fase==fase_actual)
+        surf=pygame.Surface((26,26),pygame.SRCALPHA)
+        self._draw(surf,13,13,c); surf.set_alpha(255 if en_fase else 80)
+        pantalla.blit(surf,(sx,sy))
+        if en_fase and self._brillo>12:
+            g=pygame.Surface((26,26),pygame.SRCALPHA)
+            pygame.draw.circle(g,(255,255,255,self._brillo),(13,13),12); pantalla.blit(g,(sx,sy))
+    def _draw(self,s,cx,cy,c):
+        t=self.tipo
+        if t in('manzana','naranja'):
+            pygame.draw.circle(s,c,(cx,cy),9)
+            pygame.draw.circle(s,tuple(min(255,v+60)for v in c),(cx-3,cy-3),3)
+            pygame.draw.line(s,(50,110,30),(cx,cy-4),(cx,cy-10),2)
+        elif t=='flor':
+            for a in range(0,360,72):
+                r=math.radians(a);pygame.draw.circle(s,c,(cx+int(math.cos(r)*7),cy+int(math.sin(r)*7)),4)
+            pygame.draw.circle(s,(255,240,100),(cx,cy),4)
+        elif t=='concha':
+            pygame.draw.ellipse(s,c,(cx-9,cy-5,18,11))
+            for k in range(3):pygame.draw.arc(s,(200,180,130),(cx-9+k*3,cy-5,18-k*3,11),0,math.pi,1)
+        elif t=='estrella':
+            pts=[(cx+int(math.cos(math.radians(k*36-90))*(9 if k%2==0 else 4)),
+                  cy+int(math.sin(math.radians(k*36-90))*(9 if k%2==0 else 4)))for k in range(10)]
+            pygame.draw.polygon(s,c,pts)
+        elif t=='sol_cristal':
+            pygame.draw.polygon(s,c,[(cx,cy-10),(cx+8,cy),(cx,cy+10),(cx-8,cy)])
+            pygame.draw.polygon(s,(255,240,150),[(cx,cy-6),(cx+4,cy),(cx,cy+6),(cx-4,cy)])
+            for a in range(0,360,45):
+                r=math.radians(a);pygame.draw.line(s,(255,255,200),(cx,cy),(cx+int(math.cos(r)*11),cy+int(math.sin(r)*11)),1)
+        elif t=='flor_dorada':
+            for a in range(0,360,72):
+                r=math.radians(a);pygame.draw.circle(s,c,(cx+int(math.cos(r)*8),cy+int(math.sin(r)*8)),5)
+            pygame.draw.circle(s,(255,240,80),(cx,cy),4)
+        elif t=='luna_piedra':
+            pygame.draw.ellipse(s,(170,175,195),(cx-9,cy-3,18,12))
+            pygame.draw.circle(s,(210,220,255),(cx,cy-5),7)
+            pygame.draw.circle(s,(90,90,130),(cx+4,cy-8),5)
+        elif t=='estrella_fugaz':
+            pts=[(cx+int(math.cos(math.radians(k*36-90))*(9 if k%2==0 else 4)),
+                  cy+int(math.sin(math.radians(k*36-90))*(9 if k%2==0 else 4)))for k in range(10)]
+            pygame.draw.polygon(s,c,pts)
+            for idx,dx in enumerate([8,14,20]):
+                a=140-idx*45
+                if a>0:pygame.draw.line(s,(*c,a),(cx-dx,cy+2),(cx-dx-4,cy+2),2)
 
 
-# ==============================================================
-#  A*  —  algoritmo de pathfinding para que los aldeanos encuentren su camino
-#  tipo 0 → costo x1  (hierba normal)
-#  tipo 1 → costo x2  (camino de tierra)
-#  tipo 2/3 → bloqueado
-# ==============================================================
-def _astar(inicio, destino, obstaculos, ancho_ente, alto_ente,
-           tam_celda=32, mapa_ancho=5000, mapa_alto=5000,
-           mapa_celdas=None):
-
-    def mundo_a_celda(wx, wy):
-        return (int(wx) // tam_celda, int(wy) // tam_celda)
-
-    def celda_a_mundo(cx, cy):
-        return (cx * tam_celda, cy * tam_celda)
-
-    def costo_celda(celda):
-        if not mapa_celdas:
-            return 1.0
-        return 2.0 if mapa_celdas.get(celda, 0) == 1 else 1.0
-
-    celdas_extra_x = max(0, (ancho_ente - 1) // tam_celda)
-    celdas_extra_y = max(0, (alto_ente  - 1) // tam_celda)
-
-    celdas_bloqueadas = set()
-    for obs in obstaculos:
-        cx0 = obs.left   // tam_celda
-        cy0 = obs.top    // tam_celda
-        cx1 = (obs.right  - 1) // tam_celda
-        cy1 = (obs.bottom - 1) // tam_celda
-        for cy in range(cy0 - celdas_extra_y, cy1 + 1):
-            for cx in range(cx0 - celdas_extra_x, cx1 + 1):
-                celdas_bloqueadas.add((cx, cy))
-
-    max_cx = mapa_ancho // tam_celda
-    max_cy = mapa_alto  // tam_celda
-
-    inicio_c  = mundo_a_celda(*inicio)
-    destino_c = mundo_a_celda(*destino)
-
-    if destino_c in celdas_bloqueadas:
-        mejor, mejor_dist = None, float('inf')
-        for dy in range(-3, 4):
-            for dx in range(-3, 4):
-                nc = (destino_c[0] + dx, destino_c[1] + dy)
-                if nc not in celdas_bloqueadas:
-                    d = abs(dx) + abs(dy)
-                    if d < mejor_dist:
-                        mejor_dist, mejor = d, nc
-        if mejor:
-            destino_c = mejor
-        else:
-            return []
-
-    if inicio_c == destino_c:
-        return [celda_a_mundo(*destino_c)]
-
-    vecinos = [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]
-    costos  = [1.0, 1.0, 1.0, 1.0, 1.414, 1.414, 1.414, 1.414]
-
-    abierta  = []
-    heapq.heappush(abierta, (0.0, inicio_c))
-    g_score  = {inicio_c: 0.0}
-    vinieron = {}
-    max_nodos, visitados = 2000, 0
-
-    while abierta and visitados < max_nodos:
-        _, actual = heapq.heappop(abierta)
-        visitados += 1
-
-        if actual == destino_c:
-            camino, nodo = [], actual
-            while nodo in vinieron:
-                camino.append(celda_a_mundo(*nodo))
-                nodo = vinieron[nodo]
-            camino.reverse()
-            return camino
-
-        for k, (dx, dy) in enumerate(vecinos):
-            vecino = (actual[0] + dx, actual[1] + dy)
-            if vecino in celdas_bloqueadas:
-                continue
-            if not (0 <= vecino[0] < max_cx and 0 <= vecino[1] < max_cy):
-                continue
-            if dx != 0 and dy != 0:
-                if (actual[0]+dx, actual[1]) in celdas_bloqueadas:
-                    continue
-                if (actual[0], actual[1]+dy) in celdas_bloqueadas:
-                    continue
-
-            nuevo_g = g_score[actual] + costos[k] * costo_celda(vecino)
-            if nuevo_g < g_score.get(vecino, float('inf')):
-                g_score[vecino] = nuevo_g
-                hdx = abs(vecino[0] - destino_c[0])
-                hdy = abs(vecino[1] - destino_c[1])
-                h   = max(hdx, hdy) + 0.414 * min(hdx, hdy)
-                heapq.heappush(abierta, (nuevo_g + h, vecino))
-                vinieron[vecino] = actual
-
-    return []
+# __astar 
+def _astar(inicio,destino,obstaculos,aw,ah,tam_celda=32,mapa_ancho=5000,mapa_alto=5000,mapa_celdas=None):
+    def mc(wx,wy):return(int(wx)//tam_celda,int(wy)//tam_celda)
+    def cm(cx,cy):return(cx*tam_celda,cy*tam_celda)
+    def cost(c):return 2.0 if mapa_celdas and mapa_celdas.get(c,0)==1 else 1.0
+    ex=max(0,(aw-1)//tam_celda);ey=max(0,(ah-1)//tam_celda)
+    bloq=set()
+    for o in obstaculos:
+        for cy in range(o.top//tam_celda-ey,(o.bottom-1)//tam_celda+1):
+            for cx in range(o.left//tam_celda-ex,(o.right-1)//tam_celda+1):bloq.add((cx,cy))
+    mx,my=mapa_ancho//tam_celda,mapa_alto//tam_celda
+    ic,dc=mc(*inicio),mc(*destino)
+    if dc in bloq:
+        best,bd=None,1e9
+        for dy in range(-3,4):
+            for dx in range(-3,4):
+                nc=(dc[0]+dx,dc[1]+dy)
+                if nc not in bloq and abs(dx)+abs(dy)<bd:bd,best=abs(dx)+abs(dy),nc
+        if best:dc=best
+        else:return[]
+    if ic==dc:return[cm(*dc)]
+    dirs=[(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]
+    costs=[1,1,1,1,1.414,1.414,1.414,1.414]
+    heap=[(0.0,ic)];g={ic:0.0};came={};vis=0
+    while heap and vis<2000:
+        _,cur=heapq.heappop(heap);vis+=1
+        if cur==dc:
+            path=[];n=cur
+            while n in came:path.append(cm(*n));n=came[n]
+            path.reverse();return path
+        for k,(dx,dy) in enumerate(dirs):
+            nb=(cur[0]+dx,cur[1]+dy)
+            if nb in bloq or not(0<=nb[0]<mx and 0<=nb[1]<my):continue
+            if dx and dy and((cur[0]+dx,cur[1])in bloq or(cur[0],cur[1]+dy)in bloq):continue
+            ng=g[cur]+costs[k]*cost(nb)
+            if ng<g.get(nb,1e9):
+                g[nb]=ng;hdx,hdy=abs(nb[0]-dc[0]),abs(nb[1]-dc[1])
+                heapq.heappush(heap,(ng+max(hdx,hdy)+0.414*min(hdx,hdy),nb));came[nb]=cur
+    return[]
 
 
-# ==============================================================
-#  Aldeano
-#  NPC amigable que deambula por su zona.
-#  Máquina de estados:
-#    DEAMBULAR (0) → camina a destinos aleatorios dentro de su zona
-#    SALUDAR   (1) → se acerca al jugador y muestra un diálogo
-#    REGRESAR  (2) → vuelve a su posición base
-# ==============================================================
+# Aldeano 
 class Aldeano():
-    DEAMBULAR = 0
-    SALUDAR   = 1
-    REGRESAR  = 2
-
-    PALETA = [
-        ((255, 200,  95), (180, 120,  55)),
-        (( 95, 195, 255), ( 55, 130, 185)),
-        ((200, 110, 255), (130,  65, 205)),
-        (( 95, 220, 125), ( 55, 160,  80)),
-        ((255, 125,  95), (200,  75,  55)),
-        ((255, 255, 155), (200, 200,  80)),
-    ]
-
-    def __init__(self, x, y, w, h, vel,
-                 zona_cx, zona_cy, zona_radio,
-                 pantalla, personaje,
-                 nombre='Aldeano', indice_color=0):
-        self.rect         = pygame.Rect(x, y, w, h)
-        self.pantalla     = pantalla
-        self.personaje    = personaje
-        self.nombre       = nombre
-        self.vel          = vel
-
-        self.zona_cx      = float(zona_cx)
-        self.zona_cy      = float(zona_cy)
-        self.zona_radio   = zona_radio
-
-        self.pos_x_mundo  = float(x)
-        self.pos_y_mundo  = float(y)
-        self.pos_base_x   = float(x)
-        self.pos_base_y   = float(y)
-
-        self.vel_x = 0.0
-        self.vel_y = 0.0
-
-        self.estado = self.DEAMBULAR
-
-        self.destino_x    = float(x)
-        self.destino_y    = float(y)
-
-        self.tiempo_espera  = random.randint(30, 120)
-        self.frame          = 0
-        self.cont_frames    = 0
-
-        self.dialogo        = ''
-        self.tiempo_dialogo = 0
-
-        idx = indice_color % len(self.PALETA)
-        self.color_cuerpo  = self.PALETA[idx][0]
-        self.color_sombra  = self.PALETA[idx][1]
-
-        self._frames = self._generar_frames(w, h)
-        self._fuente = None   
-
-    def _generar_frames(self, w, h):
-        """Genera 4 fotogramas de animación"""
-        frames = []
+    DEAMBULAR=0;SALUDAR=1;REGRESAR=2
+    PALETA=[((255,200,95),(180,120,55)),((95,195,255),(55,130,185)),
+            ((200,110,255),(130,65,205)),((95,220,125),(55,160,80)),((255,125,95),(200,75,55))]
+    def __init__(self,x,y,w,h,vel,zona_cx,zona_cy,zona_radio,pantalla,personaje,nombre='Aldeano',indice_color=0):
+        self.rect=pygame.Rect(x,y,w,h);self.pantalla=pantalla;self.personaje=personaje
+        self.nombre=nombre;self.vel=vel
+        self.zona_cx=float(zona_cx);self.zona_cy=float(zona_cy);self.zona_radio=zona_radio
+        self.pos_x_mundo=float(x);self.pos_y_mundo=float(y)
+        self.pos_base_x=float(x);self.pos_base_y=float(y)
+        self.vel_x=0.0;self.vel_y=0.0;self.estado=self.DEAMBULAR
+        self.destino_x=float(x);self.destino_y=float(y)
+        self.tiempo_espera=random.randint(30,120);self.frame=0;self.cont_frames=0
+        self.dialogo='';self.tiempo_dialogo=0
+        self.indice_trade=indice_color%len(OFERTAS_DIA)
+        self.trade_offer=OFERTAS_DIA[self.indice_trade]
+        idx=indice_color%len(self.PALETA)
+        self.color_cuerpo=self.PALETA[idx][0];self.color_sombra=self.PALETA[idx][1]
+        self._frames=self._gen_frames(w,h);self._fuente=None
+    def actualizar_fase(self,fase):
+        of=OFERTAS_DIA if fase=='dia' else OFERTAS_NOCHE
+        self.trade_offer=of[self.indice_trade%len(of)]
+    def puede_intercambiar(self,p):
+        t=self.trade_offer;return p.inventario.count(t['quiere'])>=t['cantidad']
+    def ejecutar_intercambio(self,p):
+        t=self.trade_offer
+        for _ in range(t['cantidad']):p.inventario.remove(t['quiere'])
+        if len(p.inventario)<p.max_inventario:p.inventario.append(t['da'])
+        p.trades_realizados+=1;self.dialogo=f"Aqui: {t['da']}!";self.tiempo_dialogo=0
+    def _gen_frames(self,w,h):
+        frames=[]
         for f in range(4):
-            s = pygame.Surface((w, h), pygame.SRCALPHA).convert_alpha()
-            cx, cy = w // 2, h // 2
-
-            # Sombra elíptica en el suelo
-            pygame.draw.ellipse(s, (0, 0, 0), (cx - 12, h - 10, 24, 7))
-
-            # Piernas alternadas para simular caminar
-            offset = [0, 5, 0, -5][f]
-            pygame.draw.rect(s, self.color_sombra,
-                             (cx - 9, cy + 5, 6, 11 + offset))
-            pygame.draw.rect(s, self.color_sombra,
-                             (cx + 3, cy + 5, 6, 11 - offset))
-
-            # Cuerpo
-            pygame.draw.ellipse(s, self.color_cuerpo,
-                                (cx - 13, cy - 6, 26, 18))
-
-            # Cabeza
-            pygame.draw.circle(s, self.color_cuerpo, (cx, cy - 11), 12)
-
-            # Orejas de animal (triangulares)
-            pygame.draw.polygon(s, self.color_sombra, [
-                (cx - 10, cy - 19), (cx -  4, cy - 30), (cx,      cy - 19)])
-            pygame.draw.polygon(s, self.color_sombra, [
-                (cx,       cy - 19), (cx +  4, cy - 30), (cx + 10, cy - 19)])
-
-            # Ojos
-            ojo_y = cy - 13
-            pygame.draw.circle(s, (30, 30, 30), (cx - 4, ojo_y), 3)
-            pygame.draw.circle(s, (30, 30, 30), (cx + 4, ojo_y), 3)
-            pygame.draw.circle(s, (255, 255, 255), (cx - 3, ojo_y - 1), 1)
-            pygame.draw.circle(s, (255, 255, 255), (cx + 5, ojo_y - 1), 1)
-
-            # Nariz pequeña
-            pygame.draw.ellipse(s, self.color_sombra, (cx - 2, cy - 8, 4, 3))
-
+            s=pygame.Surface((w,h),pygame.SRCALPHA).convert_alpha();cx,cy=w//2,h//2
+            pygame.draw.ellipse(s,(0,0,0),(cx-12,h-10,24,7))
+            off=[0,5,0,-5][f]
+            pygame.draw.rect(s,self.color_sombra,(cx-9,cy+5,6,11+off))
+            pygame.draw.rect(s,self.color_sombra,(cx+3,cy+5,6,11-off))
+            pygame.draw.ellipse(s,self.color_cuerpo,(cx-13,cy-6,26,18))
+            pygame.draw.circle(s,self.color_cuerpo,(cx,cy-11),12)
+            pygame.draw.polygon(s,self.color_sombra,[(cx-10,cy-19),(cx-4,cy-30),(cx,cy-19)])
+            pygame.draw.polygon(s,self.color_sombra,[(cx,cy-19),(cx+4,cy-30),(cx+10,cy-19)])
+            oy=cy-13
+            pygame.draw.circle(s,(30,30,30),(cx-4,oy),3);pygame.draw.circle(s,(30,30,30),(cx+4,oy),3)
+            pygame.draw.circle(s,(255,255,255),(cx-3,oy-1),1);pygame.draw.circle(s,(255,255,255),(cx+5,oy-1),1)
+            pygame.draw.ellipse(s,self.color_sombra,(cx-2,cy-8,4,3))
             frames.append(s)
         return frames
-
     def getImagen(self):
-        self.cont_frames += 1
-        vel_mag = math.hypot(self.vel_x, self.vel_y)
-        if vel_mag > 0.1:
-            intervalo = max(3, int(18 / vel_mag))
-            if self.cont_frames > intervalo:
-                self.cont_frames = 0
-                self.frame = (self.frame + 1) % 4
-        else:
-            self.frame = 0
-
-        img = self._frames[self.frame]
-        if self.vel_x < 0:
-            img = pygame.transform.flip(img, True, False)
-        return img
-
-    def dibujate(self, personaje=None):
-        ref = personaje or self.personaje
-        sx  = int(self.pos_x_mundo - ref.camara_x)
-        sy  = int(self.pos_y_mundo - ref.camara_y)
-
-        self.pantalla.blit(self.getImagen(),
-                           pygame.Rect(sx, sy, self.rect.width, self.rect.height))
-
-        if self._fuente is None:
-            self._fuente = pygame.font.SysFont(None, 16)
-
-        # Nombre sobre el personaje
-        nom = self._fuente.render(self.nombre, True, (255, 255, 255))
-        self.pantalla.blit(nom,
-                           (sx + self.rect.width // 2 - nom.get_width() // 2,
-                            sy - 16))
-
-        # Burbuja de diálogo
-        if self.estado == self.SALUDAR and self.dialogo:
-            fuente2 = pygame.font.SysFont(None, 18)
-            txt     = fuente2.render(f'"{self.dialogo}"', True, (40, 40, 40))
-            bx = sx + self.rect.width // 2 - txt.get_width() // 2
-            by = sy - 34
-            fondo = pygame.Surface(
-                (txt.get_width() + 10, txt.get_height() + 8), pygame.SRCALPHA
-            )
-            fondo.fill((255, 250, 220, 210))
-            pygame.draw.rect(fondo, (200, 185, 130),
-                             (0, 0, fondo.get_width(), fondo.get_height()), 1)
-            self.pantalla.blit(fondo, (bx - 5, by - 4))
-            self.pantalla.blit(txt,   (bx,     by))
-
-    def muevete(self, personaje, obstaculos=None):
+        self.cont_frames+=1;vm=math.hypot(self.vel_x,self.vel_y)
+        if vm>0.1 and self.cont_frames>max(3,int(18/vm)):self.cont_frames=0;self.frame=(self.frame+1)%4
+        elif vm<=0.1:self.frame=0
+        img=self._frames[self.frame]
+        return pygame.transform.flip(img,True,False) if self.vel_x<0 else img
+    def dibujate(self,personaje=None):
+        ref=personaje or self.personaje
+        sx=int(self.pos_x_mundo-ref.camara_x);sy=int(self.pos_y_mundo-ref.camara_y)
+        self.pantalla.blit(self.getImagen(),pygame.Rect(sx,sy,self.rect.width,self.rect.height))
+        if not self._fuente:self._fuente=pygame.font.SysFont(None,16)
+        nom=self._fuente.render(self.nombre,True,(255,255,255))
+        self.pantalla.blit(nom,(sx+self.rect.width//2-nom.get_width()//2,sy-16))
+        if self.estado==self.SALUDAR and self.dialogo:
+            f2=pygame.font.SysFont(None,19)
+            t=self.trade_offer
+            linea1=f"Ofrece: {t['cantidad']} {t['quiere']}"
+            linea2=f"A cambio: {t['da']}"
+            linea3=f"Presiona E para canjear"
+            txts=[f2.render(l,True,c) for l,c in
+                  [(linea1,(20,20,140)),(linea2,(20,120,20)),(linea3,(100,60,0))]]
+            bw=max(t.get_width() for t in txts)+16
+            bh=sum(t.get_height() for t in txts)+14
+            bx=sx+self.rect.width//2-bw//2; by=sy-bh-8
+            fd=pygame.Surface((bw,bh),pygame.SRCALPHA)
+            fd.fill((255,252,215,235))
+            pygame.draw.rect(fd,(160,140,60),(0,0,bw,bh),2)
+            self.pantalla.blit(fd,(bx,by))
+            cy=by+4
+            for txt in txts:
+                self.pantalla.blit(txt,(bx+8,cy)); cy+=txt.get_height()+2
+    def muevete(self,personaje,obstaculos=None):
         match self.estado:
-            case 0: self._deambular(personaje)
-            case 1: self._saludar(personaje)
-            case 2: self._regresar(personaje)
-
-        bloqueantes = (obstaculos.get_obstaculos()
-                       if hasattr(obstaculos, 'get_obstaculos')
-                       else (obstaculos if isinstance(obstaculos, list) else []))
-
-        # Movimiento en X con colisión
-        self.pos_x_mundo += self.vel_x
-        mi = pygame.Rect(int(self.pos_x_mundo), int(self.pos_y_mundo),
-                         self.rect.width, self.rect.height)
-        for obs in bloqueantes:
-            if mi.colliderect(obs):
-                if self.vel_x > 0:
-                    self.pos_x_mundo = float(obs.left - self.rect.width)
-                else:
-                    self.pos_x_mundo = float(obs.right)
-                mi.x   = int(self.pos_x_mundo)
-                self.vel_x = 0
-
-        # Movimiento en Y con colisión
-        self.pos_y_mundo += self.vel_y
-        mi = pygame.Rect(int(self.pos_x_mundo), int(self.pos_y_mundo),
-                         self.rect.width, self.rect.height)
-        for obs in bloqueantes:
-            if mi.colliderect(obs):
-                if self.vel_y > 0:
-                    self.pos_y_mundo = float(obs.top - self.rect.height)
-                else:
-                    self.pos_y_mundo = float(obs.bottom)
-                mi.y   = int(self.pos_y_mundo)
-                self.vel_y = 0
-
-        # No salir del mapa
-        self.pos_x_mundo = max(0.0, min(self.pos_x_mundo, 4960.0))
-        self.pos_y_mundo = max(0.0, min(self.pos_y_mundo, 4960.0))
-
-    def _deambular(self, personaje):
-        if self.tiempo_espera > 0:
-            self.vel_x = self.vel_y = 0
-            self.tiempo_espera -= 1
-            if self._ver_personaje(personaje, radio=220):
-                self.estado = self.SALUDAR
-                self._elegir_dialogo()
+            case 0:self._deambular(personaje)
+            case 1:self._saludar(personaje)
+            case 2:self._regresar(personaje)
+        bl=(obstaculos.get_obstaculos() if hasattr(obstaculos,'get_obstaculos')
+            else obstaculos if isinstance(obstaculos,list) else[])
+        self.pos_x_mundo+=self.vel_x
+        mi=pygame.Rect(int(self.pos_x_mundo),int(self.pos_y_mundo),self.rect.width,self.rect.height)
+        for o in bl:
+            if mi.colliderect(o):
+                self.pos_x_mundo=float(o.left-self.rect.width) if self.vel_x>0 else float(o.right)
+                mi.x=int(self.pos_x_mundo);self.vel_x=0
+        self.pos_y_mundo+=self.vel_y
+        mi=pygame.Rect(int(self.pos_x_mundo),int(self.pos_y_mundo),self.rect.width,self.rect.height)
+        for o in bl:
+            if mi.colliderect(o):
+                self.pos_y_mundo=float(o.top-self.rect.height) if self.vel_y>0 else float(o.bottom)
+                mi.y=int(self.pos_y_mundo);self.vel_y=0
+        self.pos_x_mundo=max(0.0,min(self.pos_x_mundo,4960.0))
+        self.pos_y_mundo=max(0.0,min(self.pos_y_mundo,4960.0))
+    def _deambular(self,p):
+        if self.tiempo_espera>0:
+            self.vel_x=self.vel_y=0;self.tiempo_espera-=1
+            if self._ver(p):self.estado=self.SALUDAR;self._oferta()
             return
-
-        dx   = self.destino_x - self.pos_x_mundo
-        dy   = self.destino_y - self.pos_y_mundo
-        dist = math.hypot(dx, dy)
-
-        if dist < abs(self.vel) * 2 or dist == 0:
-            self.vel_x = self.vel_y = 0
-            self.tiempo_espera = random.randint(60, 200)
-            ang = random.uniform(0, 2 * math.pi)
-            r   = random.uniform(0, self.zona_radio)
-            self.destino_x = max(50, min(4900, self.zona_cx + math.cos(ang) * r))
-            self.destino_y = max(50, min(4900, self.zona_cy + math.sin(ang) * r))
+        dx=self.destino_x-self.pos_x_mundo;dy=self.destino_y-self.pos_y_mundo;dist=math.hypot(dx,dy)
+        if dist<abs(self.vel)*2 or dist==0:
+            self.vel_x=self.vel_y=0;self.tiempo_espera=random.randint(60,200)
+            a=random.uniform(0,2*math.pi);r=random.uniform(0,self.zona_radio)
+            self.destino_x=max(50,min(4900,self.zona_cx+math.cos(a)*r))
+            self.destino_y=max(50,min(4900,self.zona_cy+math.sin(a)*r))
+        else:self.vel_x=(dx/dist)*abs(self.vel);self.vel_y=(dy/dist)*abs(self.vel)
+        if self._ver(p):self.estado=self.SALUDAR;self._oferta()
+    def _saludar(self,p):
+        px,py=p.get_pos_mundo();dx=px-self.pos_x_mundo;dy=py-self.pos_y_mundo;dist=math.hypot(dx,dy)
+        if dist>85:spd=abs(self.vel)*0.6;self.vel_x=(dx/dist)*spd;self.vel_y=(dy/dist)*spd
         else:
-            self.vel_x = (dx / dist) * abs(self.vel)
-            self.vel_y = (dy / dist) * abs(self.vel)
-
-        if self._ver_personaje(personaje, radio=220):
-            self.estado = self.SALUDAR
-            self._elegir_dialogo()
-
-    def _saludar(self, personaje):
-        px, py = personaje.get_pos_mundo()
-        dx = px - self.pos_x_mundo
-        dy = py - self.pos_y_mundo
-        dist = math.hypot(dx, dy)
-
-        if dist > 85:
-            spd = abs(self.vel) * 0.6
-            self.vel_x = (dx / dist) * spd
-            self.vel_y = (dy / dist) * spd
-        else:
-            self.vel_x = self.vel_y = 0
-            self.tiempo_dialogo += 1
-            if self.tiempo_dialogo > 160:
-                self.tiempo_dialogo = 0
-                self.dialogo        = ''
-                self.estado         = self.REGRESAR
-
-        if not self._ver_personaje(personaje, radio=380):
-            self.dialogo = ''
-            self.estado  = self.REGRESAR
-
-    def _regresar(self, personaje=None):
-        dx   = self.pos_base_x - self.pos_x_mundo
-        dy   = self.pos_base_y - self.pos_y_mundo
-        dist = math.hypot(dx, dy)
-
-        if dist < abs(self.vel) * 2:
-            self.pos_x_mundo   = self.pos_base_x
-            self.pos_y_mundo   = self.pos_base_y
-            self.vel_x = self.vel_y = 0
-            self.estado        = self.DEAMBULAR
-            self.tiempo_espera = 60
-        else:
-            self.vel_x = (dx / dist) * abs(self.vel)
-            self.vel_y = (dy / dist) * abs(self.vel)
-
-        if personaje and self._ver_personaje(personaje, radio=220):
-            self.estado = self.SALUDAR
-            self._elegir_dialogo()
-
-    def _elegir_dialogo(self):
-        frases = [
-            '¡Hola, viajero!',
-            '¡Qué bonito dia!',
-            '¿Has visto las flores?',
-            'Me gusta este pueblo.',
-            '¡Buenos dias!',
-            'Las manzanas estan ricas.',
-            'El lago se ve precioso.',
-            '¿Ya recogiste frutas hoy?',
-            'Hace fresquito',
-            '¡Te estaba buscando!',
-            '¡Abrazame!',
-        ]
-        self.dialogo        = random.choice(frases)
-        self.tiempo_dialogo = 0
-
-    def _ver_personaje(self, personaje, radio=220):
-        px, py = personaje.get_pos_mundo()
-        return math.hypot(px - self.pos_x_mundo, py - self.pos_y_mundo) < radio
+            self.vel_x=self.vel_y=0;self.tiempo_dialogo+=1
+            if self.tiempo_dialogo>180:self.tiempo_dialogo=0;self.dialogo='';self.estado=self.REGRESAR
+        if not self._ver(p,380):self.dialogo='';self.estado=self.REGRESAR
+    def _regresar(self,p=None):
+        dx=self.pos_base_x-self.pos_x_mundo;dy=self.pos_base_y-self.pos_y_mundo;dist=math.hypot(dx,dy)
+        if dist<abs(self.vel)*2:
+            self.pos_x_mundo=self.pos_base_x;self.pos_y_mundo=self.pos_base_y
+            self.vel_x=self.vel_y=0;self.estado=self.DEAMBULAR;self.tiempo_espera=60
+        else:self.vel_x=(dx/dist)*abs(self.vel);self.vel_y=(dy/dist)*abs(self.vel)
+        if p and self._ver(p):self.estado=self.SALUDAR;self._oferta()
+    def _oferta(self):
+        t=self.trade_offer
+        self.dialogo=f"Da: {t['cantidad']} {t['quiere']} | Recibe: {t['da']} | Presiona E"
+        self.tiempo_dialogo=0
+    def _ver(self,p,radio=220):
+        px,py=p.get_pos_mundo();return math.hypot(px-self.pos_x_mundo,py-self.pos_y_mundo)<radio
 
 
-# ==============================================================
-#  Habitante  (aldeano especial con A*)
-#  Igual que Aldeano pero los estados SALUDAR y REGRESAR
-# ==============================================================
+# Habitante (Aldeano con A*)
 class Habitante(Aldeano):
-    def __init__(self, x, y, w, h, vel,
-                 zona_cx, zona_cy, zona_radio,
-                 pantalla, personaje,
-                 nombre='Habitante', indice_color=0,
-                 mapa_celdas=None):
-        super().__init__(x, y, w, h, vel,
-                         zona_cx, zona_cy, zona_radio,
-                         pantalla, personaje,
-                         nombre, indice_color)
-        self.mapa_celdas          = mapa_celdas or {}
-        self._camino              = []
-        self._indice_camino       = 0
-        self._frames_recalculo    = 0
-        self._intervalo_recalculo = 20
-        self._obstaculos_ref      = []
-
-    def set_mapa_celdas(self, mapa_celdas):
-        self.mapa_celdas = mapa_celdas
-
-    def muevete(self, personaje, obstaculos=None):
-        if hasattr(obstaculos, 'get_obstaculos'):
-            self._obstaculos_ref = obstaculos.get_obstaculos()
-        elif isinstance(obstaculos, list):
-            self._obstaculos_ref = obstaculos
-        else:
-            self._obstaculos_ref = []
-        super().muevete(personaje, obstaculos)
-
-    def _saludar(self, personaje):
-        """Usa A* para acercarse al jugador sorteando obstáculos."""
-        px, py = personaje.get_pos_mundo()
-        dist   = math.hypot(px - self.pos_x_mundo, py - self.pos_y_mundo)
-
-        if dist <= 85:
-            self.vel_x = self.vel_y = 0
-            self.tiempo_dialogo += 1
-            if self.tiempo_dialogo > 200:
-                self.tiempo_dialogo = 0
-                self.dialogo        = ''
-                self.estado         = self.REGRESAR
-                self._camino        = []
+    def __init__(self,x,y,w,h,vel,zona_cx,zona_cy,zona_radio,pantalla,personaje,
+                 nombre='Habitante',indice_color=0,mapa_celdas=None):
+        super().__init__(x,y,w,h,vel,zona_cx,zona_cy,zona_radio,pantalla,personaje,nombre,indice_color)
+        self.mapa_celdas=mapa_celdas or{};self._camino=[];self._idx=0;self._recalc=0;self._irec=20;self._obs=[]
+    def muevete(self,p,obstaculos=None):
+        self._obs=(obstaculos.get_obstaculos() if hasattr(obstaculos,'get_obstaculos')
+                   else obstaculos if isinstance(obstaculos,list) else[])
+        super().muevete(p,obstaculos)
+    def _saludar(self,p):
+        px,py=p.get_pos_mundo();dist=math.hypot(px-self.pos_x_mundo,py-self.pos_y_mundo)
+        if dist<=85:
+            self.vel_x=self.vel_y=0;self.tiempo_dialogo+=1
+            if self.tiempo_dialogo>220:self.tiempo_dialogo=0;self.dialogo='';self.estado=self.REGRESAR;self._camino=[]
             return
-
-        self._frames_recalculo += 1
-        if self._frames_recalculo >= self._intervalo_recalculo or not self._camino:
-            self._frames_recalculo = 0
-            self._camino = _astar(
-                (self.pos_x_mundo, self.pos_y_mundo),
-                (px, py),
-                self._obstaculos_ref,
-                self.rect.width, self.rect.height,
-                mapa_celdas=self.mapa_celdas
-            )
-            self._indice_camino = 0
-
-        self._seguir_camino()
-
-        if not self._ver_personaje(personaje, radio=450):
-            self.dialogo = ''
-            self.estado  = self.REGRESAR
-            self._camino = []
-
-    def _regresar(self, personaje=None):
-        """Usa A* para volver a su posición base"""
-        dx   = self.pos_base_x - self.pos_x_mundo
-        dy   = self.pos_base_y - self.pos_y_mundo
-        dist = math.hypot(dx, dy)
-
-        if dist <= abs(self.vel) * 2:
-            self.pos_x_mundo = self.pos_base_x
-            self.pos_y_mundo = self.pos_base_y
-            self.vel_x = self.vel_y = 0
-            self.estado  = self.DEAMBULAR
-            self._camino = []
-            return
-
-        self._frames_recalculo += 1
-        if self._frames_recalculo >= self._intervalo_recalculo or not self._camino:
-            self._frames_recalculo = 0
-            self._camino = _astar(
-                (self.pos_x_mundo, self.pos_y_mundo),
-                (self.pos_base_x,  self.pos_base_y),
-                self._obstaculos_ref,
-                self.rect.width, self.rect.height,
-                mapa_celdas=self.mapa_celdas
-            )
-            self._indice_camino = 0
-
-        self._seguir_camino()
-
-        if personaje and self._ver_personaje(personaje, radio=260):
-            self.estado = self.SALUDAR
-            self._elegir_dialogo()
-            self._camino = []
-
-    def _seguir_camino(self):
-        """Avanza al siguiente waypoint del camino A*."""
-        if not (self._camino and self._indice_camino < len(self._camino)):
-            self.vel_x = self.vel_y = 0
-            return
-
-        ox, oy  = self._camino[self._indice_camino]
-        dx, dy  = ox - self.pos_x_mundo, oy - self.pos_y_mundo
-        dist_wp = math.hypot(dx, dy)
-
-        if dist_wp < abs(self.vel) * 2:
-            self._indice_camino += 1
-            if self._indice_camino < len(self._camino):
-                ox, oy  = self._camino[self._indice_camino]
-                dx, dy  = ox - self.pos_x_mundo, oy - self.pos_y_mundo
-                dist_wp = math.hypot(dx, dy)
-
-        if dist_wp > 0.5:
-            self.vel_x = (dx / dist_wp) * abs(self.vel)
-            self.vel_y = (dy / dist_wp) * abs(self.vel)
-        else:
-            self.vel_x = self.vel_y = 0
+        self._recalc+=1
+        if self._recalc>=self._irec or not self._camino:
+            self._recalc=0
+            self._camino=_astar((self.pos_x_mundo,self.pos_y_mundo),(px,py),self._obs,
+                                 self.rect.width,self.rect.height,mapa_celdas=self.mapa_celdas);self._idx=0
+        self._seguir()
+        if not self._ver(p,450):self.dialogo='';self.estado=self.REGRESAR;self._camino=[]
+    def _regresar(self,p=None):
+        dx=self.pos_base_x-self.pos_x_mundo;dy=self.pos_base_y-self.pos_y_mundo;dist=math.hypot(dx,dy)
+        if dist<=abs(self.vel)*2:
+            self.pos_x_mundo=self.pos_base_x;self.pos_y_mundo=self.pos_base_y
+            self.vel_x=self.vel_y=0;self.estado=self.DEAMBULAR;self._camino=[];return
+        self._recalc+=1
+        if self._recalc>=self._irec or not self._camino:
+            self._recalc=0
+            self._camino=_astar((self.pos_x_mundo,self.pos_y_mundo),(self.pos_base_x,self.pos_base_y),
+                                 self._obs,self.rect.width,self.rect.height,mapa_celdas=self.mapa_celdas);self._idx=0
+        self._seguir()
+        if p and self._ver(p,260):self.estado=self.SALUDAR;self._oferta();self._camino=[]
+    def _seguir(self):
+        if not(self._camino and self._idx<len(self._camino)):self.vel_x=self.vel_y=0;return
+        ox,oy=self._camino[self._idx];dx,dy=ox-self.pos_x_mundo,oy-self.pos_y_mundo;d=math.hypot(dx,dy)
+        if d<abs(self.vel)*2:
+            self._idx+=1
+            if self._idx<len(self._camino):ox,oy=self._camino[self._idx];dx,dy=ox-self.pos_x_mundo,oy-self.pos_y_mundo;d=math.hypot(dx,dy)
+        if d>0.5:self.vel_x=(dx/d)*abs(self.vel);self.vel_y=(dy/d)*abs(self.vel)
+        else:self.vel_x=self.vel_y=0
 
 
-# ==============================================================
-#  Personaje 
-# ==============================================================
+# Construccion 
+class Construccion():
+    RECETAS={'casa':{'madera':5,'piedra':3},'puente':{'madera':4,'piedra':0}}
+    def __init__(self,x,y,tipo,pantalla,gestor_spr=None):
+        self.rect=pygame.Rect(x,y,128,128);self.tipo=tipo
+        self.pantalla=pantalla;self.gestor_spr=gestor_spr
+    def dibujate(self,camara_x,camara_y):
+        sx=int(self.rect.x-camara_x);sy=int(self.rect.y-camara_y)
+        if self.gestor_spr and self.gestor_spr.sprites:
+            if self.tipo=='casa' and 'casa' in self.gestor_spr.sprites:
+                self.pantalla.blit(self.gestor_spr.get('casa',128),(sx,sy))
+                return
+            if self.tipo=='puente' and 'puente' in self.gestor_spr.sprites:
+                self.pantalla.blit(self.gestor_spr.get('puente',96),(sx,sy))
+                return
+        # fallback procedural
+        if self.tipo=='casa':self._dibujar_casa(sx,sy)
+        else:self._dibujar_puente(sx,sy)
+    def _dibujar_casa(self,sx,sy):
+        pygame.draw.rect(self.pantalla,(195,140,80),(sx+2,sy+28,60,34))
+        pygame.draw.polygon(self.pantalla,(178,52,42),[(sx+2,sy+28),(sx+32,sy+5),(sx+62,sy+28)])
+        pygame.draw.rect(self.pantalla,(110,70,35),(sx+24,sy+46,16,16))
+        pygame.draw.rect(self.pantalla,(175,228,255),(sx+6,sy+34,14,12))
+    def _dibujar_puente(self,sx,sy):
+        for ry in[sy+28,sy+38]:pygame.draw.rect(self.pantalla,(158,108,48),(sx,ry,64,7))
+        for px in[sx+6,sx+28,sx+52]:pygame.draw.rect(self.pantalla,(118,78,28),(px,sy+18,8,26))
+
+
+
+# Objetivo diario
+class Objetivo():
+    _DATOS={'dia':[
+        {'desc':'Obtén 1 sol_cristal y construye 1 casa','items':{'sol_cristal':1},'const':{'casa':1},'trades':0},
+        {'desc':'Comercia con 2 aldeanos de día','items':{},'const':{},'trades':2},
+        {'desc':'Obtén 1 flor_dorada y 1 sol_cristal','items':{'flor_dorada':1,'sol_cristal':1},'const':{},'trades':0}],
+    'noche':[
+        {'desc':'Obtén 1 luna_piedra y 1 estrella_fugaz','items':{'luna_piedra':1,'estrella_fugaz':1},'const':{},'trades':0},
+        {'desc':'Construye un puente y comercia con 1 aldeano','items':{},'const':{'puente':1},'trades':1},
+        {'desc':'Obtén 2 luna_piedra','items':{'luna_piedra':2},'const':{},'trades':0}]}
+    def __init__(self,fase='dia',indice=0):
+        self.fase=fase;self.indice=indice%len(self._DATOS[fase])
+        d=self._DATOS[fase][self.indice]
+        self.desc=d['desc'];self.items_req=d['items'].copy();self.const_req=d['const'].copy()
+        self.trades_req=d['trades'];self.completado=False
+    def verificar(self,p):
+        if self.completado:return True
+        for t,n in self.items_req.items():
+            if p.inventario.count(t)<n:return False
+        for t,n in self.const_req.items():
+            if p.construcciones.get(t,0)<n:return False
+        if p.trades_realizados<self.trades_req:return False
+        self.completado=True;return True
+    def siguiente(self,fase=None):return Objetivo(fase or self.fase,self.indice+1)
+
+
+# Personaje 
 class Personaje(Sprite):
-    def __init__(self, x, y, w, h, archivo_imagen, pantalla):
-        super().__init__(x, y, w, h, archivo_imagen, pantalla)
-        self.vel    = 5
-        self.vel_x  = 0
-        self.vel_y  = 0
-        self.cuadro     = 0
-        self.aux_cuadro = 0
-        self.corriendo  = False
-        self.estado     = 0
-
-        self._cx = pantalla.get_width()  // 2 - w // 2
-        self._cy = pantalla.get_height() // 2 - h // 2
-
-        self.camara_x       = float(x) - self._cx
-        self.camara_y       = float(y) - self._cy
-        self.pos_x_absoluta = self.camara_x
-        self.pos_y_absoluta = self.camara_y
-
-        self.inventario     = []
-        self.max_inventario = 10
-        self.recoger_activo = False
-
-    def get_pos_mundo(self):
-        return (self.camara_x + self._cx, self.camara_y + self._cy)
-
-    def _get_rect_mundo(self):
-        mx, my = self.get_pos_mundo()
-        return pygame.Rect(int(mx), int(my), self.rect.width, self.rect.height)
-
+    def __init__(self,x,y,w,h,archivo,pantalla):
+        super().__init__(x,y,w,h,archivo,pantalla)
+        self.vel=5;self.vel_x=0;self.vel_y=0;self.cuadro=0;self.aux_cuadro=0
+        self.corriendo=False;self.estado=0
+        self._cx=pantalla.get_width()//2-w//2;self._cy=pantalla.get_height()//2-h//2
+        self.camara_x=float(x)-self._cx;self.camara_y=float(y)-self._cy
+        self.pos_x_absoluta=self.camara_x;self.pos_y_absoluta=self.camara_y
+        self.inventario=[];self.max_inventario=12
+        self.recoger_activo=False;self.interactuar_activo=False;self.construir_activo=False
+        self.modo_construccion='casa'
+        self.recursos={'madera':0,'piedra':0};self.construcciones={'casa':0,'puente':0}
+        self.trades_realizados=0
+    def get_pos_mundo(self):return(self.camara_x+self._cx,self.camara_y+self._cy)
     def dibujate(self):
-        pygame.draw.rect(
-            self.pantalla, (255, 255, 0),
-            (self._cx, self._cy, self.rect.width, self.rect.height), 1
-        )
-        self.pantalla.blit(self.getImagen(), (self._cx, self._cy))
-
+        pygame.draw.rect(self.pantalla,(255,255,0),(self._cx,self._cy,self.rect.width,self.rect.height),1)
+        self.pantalla.blit(self.getImagen(),(self._cx,self._cy))
     def getImagen(self):
-        imagen = pygame.Surface((32, 32), pygame.SRCALPHA).convert_alpha()
+        img=pygame.Surface((32,32),pygame.SRCALPHA).convert_alpha()
         match self.estado:
-            case 0: animacion, max_cuadros, max_aux = 0, 12, 10
-            case 1: animacion, max_cuadros, max_aux = 1,  7, 10
-            case 2: animacion, max_cuadros, max_aux = 1,  7,  5
-            case _: animacion, max_cuadros, max_aux = 0, 12, 10
-
-        imagen.blit(self.imagen, (0, 0),
-                    (self.cuadro * 32, animacion * 32, 32, 32))
-        imagen = pygame.transform.scale(imagen, (self.rect.width, self.rect.height))
-
-        if self.vel_x < 0:
-            imagen = pygame.transform.flip(imagen, True, False)
-
-        self.aux_cuadro += 1
-        if self.aux_cuadro > max_aux:
-            self.aux_cuadro = 0
-            self.cuadro    += 1
-            if self.cuadro > max_cuadros:
-                self.cuadro = 0
-        return imagen
-
-    def recoger_item(self, items):
-        """Intenta recoger un ítem cercano cuando se presiona ESPACIO."""
-        if not self.recoger_activo:
-            return None
-        self.recoger_activo = False
-        mx, my = self.get_pos_mundo()
-        zona = pygame.Rect(int(mx) - 24, int(my) - 24,
-                           self.rect.width + 48, self.rect.height + 48)
+            case 0:an,mq,ma=0,12,10
+            case 1:an,mq,ma=1,7,10
+            case 2:an,mq,ma=1,7,5
+            case _:an,mq,ma=0,12,10
+        img.blit(self.imagen,(0,0),(self.cuadro*32,an*32,32,32))
+        img=pygame.transform.scale(img,(self.rect.width,self.rect.height))
+        if self.vel_x<0:img=pygame.transform.flip(img,True,False)
+        self.aux_cuadro+=1
+        if self.aux_cuadro>ma:self.aux_cuadro=0;self.cuadro+=1
+        if self.cuadro>mq:self.cuadro=0
+        return img
+    def recoger_item(self,items,fase_actual='dia'):
+        if not self.recoger_activo:return None
+        self.recoger_activo=False
+        mx,my=self.get_pos_mundo()
+        zona=pygame.Rect(int(mx)-24,int(my)-24,self.rect.width+48,self.rect.height+48)
         for item in items:
             if not item.recogido and zona.colliderect(item.rect):
-                if len(self.inventario) < self.max_inventario:
-                    item.recogido = True
-                    self.inventario.append(item.tipo)
-                    return item.tipo
+                if item.tipo in ITEMS_VALOR and item.fase!='ambas' and item.fase!=fase_actual:continue
+                if len(self.inventario)<self.max_inventario:
+                    item.recogido=True;self.inventario.append(item.tipo);return item.tipo
         return None
-
-    def muevete(self, obstaculos=None):
-        self.recoger_activo = False
-
-        for evento in pygame.event.get():
-            if evento.type == pygame.KEYUP:
-                if evento.key == pygame.K_LEFT:   self.vel_x = 0
-                if evento.key == pygame.K_RIGHT:  self.vel_x = 0
-                if evento.key == pygame.K_UP:     self.vel_y = 0
-                if evento.key == pygame.K_DOWN:   self.vel_y = 0
-                if evento.key == pygame.K_LSHIFT:
-                    self.vel_x   /= 2
-                    self.corriendo = False
-            if evento.type == pygame.KEYDOWN:
-                if evento.key == pygame.K_LEFT:   self.vel_x = -self.vel
-                if evento.key == pygame.K_RIGHT:  self.vel_x =  self.vel
-                if evento.key == pygame.K_UP:     self.vel_y = -self.vel
-                if evento.key == pygame.K_DOWN:   self.vel_y =  self.vel
-                if evento.key == pygame.K_ESCAPE: return False
-                if evento.key == pygame.K_LSHIFT:
-                    self.vel_x   *= 2
-                    self.corriendo = True
-                if evento.key == pygame.K_SPACE:
-                    self.recoger_activo = True
-            if evento.type == pygame.QUIT:
-                return False
-
+    def muevete(self,obstaculos=None):
+        self.recoger_activo=self.interactuar_activo=self.construir_activo=False
+        for ev in pygame.event.get():
+            if ev.type==pygame.KEYUP:
+                if ev.key==pygame.K_LEFT:self.vel_x=0
+                if ev.key==pygame.K_RIGHT:self.vel_x=0
+                if ev.key==pygame.K_UP:self.vel_y=0
+                if ev.key==pygame.K_DOWN:self.vel_y=0
+                if ev.key==pygame.K_LSHIFT:self.vel_x/=2;self.corriendo=False
+            if ev.type==pygame.KEYDOWN:
+                if ev.key==pygame.K_LEFT:self.vel_x=-self.vel
+                if ev.key==pygame.K_RIGHT:self.vel_x=self.vel
+                if ev.key==pygame.K_UP:self.vel_y=-self.vel
+                if ev.key==pygame.K_DOWN:self.vel_y=self.vel
+                if ev.key==pygame.K_ESCAPE:return False
+                if ev.key==pygame.K_LSHIFT:self.vel_x*=2;self.corriendo=True
+                if ev.key==pygame.K_SPACE:self.recoger_activo=True
+                if ev.key==pygame.K_e:self.interactuar_activo=True
+                if ev.key==pygame.K_b:self.construir_activo=True
+                if ev.key==pygame.K_n:
+                    t=list(Construccion.RECETAS.keys())
+                    self.modo_construccion=t[(t.index(self.modo_construccion)+1)%len(t)]
+            if ev.type==pygame.QUIT:return False
         self.actualizarEstado()
-
-        bloqueantes = (obstaculos.get_obstaculos()
-                       if hasattr(obstaculos, 'get_obstaculos')
-                       else (obstaculos if isinstance(obstaculos, list) else []))
-
-        mundo_x, mundo_y = self.get_pos_mundo()
-
-        mundo_x += self.vel_x
-        jr = pygame.Rect(int(mundo_x), int(mundo_y), self.rect.width, self.rect.height)
-        for obs in bloqueantes:
-            if jr.colliderect(obs):
-                mundo_x = (float(obs.left - self.rect.width)
-                            if self.vel_x > 0 else float(obs.right))
-                jr.x = int(mundo_x)
-
-        mundo_y += self.vel_y
-        jr = pygame.Rect(int(mundo_x), int(mundo_y), self.rect.width, self.rect.height)
-        for obs in bloqueantes:
-            if jr.colliderect(obs):
-                mundo_y = (float(obs.top - self.rect.height)
-                            if self.vel_y > 0 else float(obs.bottom))
-                jr.y = int(mundo_y)
-
-        mundo_x = max(0.0, min(mundo_x, 5000.0 - self.rect.width))
-        mundo_y = max(0.0, min(mundo_y, 5000.0 - self.rect.height))
-
-        self.camara_x       = mundo_x - self._cx
-        self.camara_y       = mundo_y - self._cy
-        self.pos_x_absoluta = self.camara_x
-        self.pos_y_absoluta = self.camara_y
+        bl=(obstaculos.get_obstaculos() if hasattr(obstaculos,'get_obstaculos')
+            else obstaculos if isinstance(obstaculos,list) else[])
+        wx,wy=self.get_pos_mundo()
+        wx+=self.vel_x
+        jr=pygame.Rect(int(wx),int(wy),self.rect.width,self.rect.height)
+        for o in bl:
+            if jr.colliderect(o):wx=float(o.left-self.rect.width) if self.vel_x>0 else float(o.right);jr.x=int(wx)
+        wy+=self.vel_y
+        jr=pygame.Rect(int(wx),int(wy),self.rect.width,self.rect.height)
+        for o in bl:
+            if jr.colliderect(o):wy=float(o.top-self.rect.height) if self.vel_y>0 else float(o.bottom);jr.y=int(wy)
+        wx=max(0.0,min(wx,5000.0-self.rect.width))
+        wy=max(0.0,min(wy,5000.0-self.rect.height))
+        self.camara_x=wx-self._cx; self.camara_y=wy-self._cy
+        self.pos_x_absoluta=self.camara_x; self.pos_y_absoluta=self.camara_y
         return True
-
     def actualizarEstado(self):
-        if   self.vel_x == 0 and self.vel_y == 0: self.estado = 0
-        elif self.corriendo:                        self.estado = 1
-        else:                                       self.estado = 2
+        if self.vel_x==0 and self.vel_y==0:self.estado=0
+        elif self.corriendo:self.estado=1
+        else:self.estado=2
