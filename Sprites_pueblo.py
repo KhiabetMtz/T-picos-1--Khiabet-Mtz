@@ -153,10 +153,9 @@ class SpritesExterior:
         pantalla.blit(self.get(nombre, tam_px), (sx, sy))
 
 # TileSetPueblo 
-# Tipos tile:
-#   0=hierba  1=camino  2=árbol(obstáculo/talable)
-#   3=agua    4=flores  5=roca grande(mucha piedra)
-#   6=piedrita pequeña (poca piedra)
+#   0=hierba  1=camino  2=árbol talable
+#   3=agua    4=flores  5=roca grande
+#   6=piedrita pequeña 
 class TileSetPueblo(TileSet):
     def __init__(self,x,y,w,h,archivo,pantalla,atw,ath,personaje,
                  archivo_csv=None, gestor_spr=None):
@@ -180,7 +179,7 @@ class TileSetPueblo(TileSet):
         if not self.gestor_spr or not self.gestor_spr.sprites:
             return
         tw = self.rect.width
-        TAM = tw * 2   # 64px — tamaño base de árbol/roca en pantalla
+        TAM = tw * 2  
         sw, sh = pantalla.get_width(), pantalla.get_height()
         for (tx,ty), nombre in self.sprites_mundo.items():
             sx = tx*tw - int(camara_x)
@@ -324,15 +323,15 @@ class TileSetPueblo(TileSet):
         if not mapa_csv:
             self._generar_caminos(nc,nf,tw)
             self._generar_bosques(nc,nf,tw)
-            self._generar_lago(nc,nf,tw)
             self._generar_flores(nc,nf)
             self._generar_montes(nc,nf,tw)
+            self._generar_rio_cruz(nc,nf,tw)  
         for fila in self.Tiles:
             for tile in fila: sup.blit(tile.imagen,tile.rect)
         return sup
 
     def _generar_caminos(self,nc,nf,tw):
-        # Camino horizontal y vertical — libres para caminar
+        # Camino horizontal y vertical
         for i in range(nc):
             for dy in range(-1,2):
                 j=nf//2+dy
@@ -369,22 +368,99 @@ class TileSetPueblo(TileSet):
                     self.sprites_mundo[(i,j)]=nombre
                     self.obstaculos.append(pygame.Rect(i*tw,j*tw,tw,tw*2))
 
-    def _generar_lago(self,nc,nf,tw):
-        pass  # Sin lago
+    def _generar_rio_cruz(self, nc, nf, tw):
+        """Franja de agua en forma de cruz, centrada en el mapa.
+        Bloquea el paso hasta que se construya un puente encima."""
+        ancho = 3  # ancho de la franja en tiles
+        cc = nc // 2  # columna central
+        cf = nf // 2  # fila central
+
+        # Franja vertical 
+        for j in range(nf):
+            for dx in range(-(ancho // 2), ancho // 2 + 1):
+                i = cc + dx
+                if 0 <= i < nc:
+                    self._poner_agua(i, j, tw)
+
+        # Franja horizontal 
+        for i in range(nc):
+            for dy in range(-(ancho // 2), ancho // 2 + 1):
+                j = cf + dy
+                if 0 <= j < nf:
+                    self._poner_agua(i, j, tw)
+
+    def _poner_agua(self, i, j, tw):
+        """Convierte un tile en agua (tipo 3): dibujo, celda y obstáculo."""
+        spawn_tx = 2450 // tw
+        spawn_ty = 2450 // tw
+        if abs(i - spawn_tx) <= 1 and abs(j - spawn_ty) <= 1:
+            return
+
+        if j < len(self.Tiles) and i < len(self.Tiles[j]):
+            self.Tiles[j][i].tipo = 3
+            self.Tiles[j][i].imagen = self._tile_agua()
+        self.mapa_celdas[(i, j)] = 3
+        self.water_positions.append((i * tw, j * tw))
+        self.obstaculos.append(pygame.Rect(i * tw, j * tw, tw, tw))
 
     def abrir_paso_rio(self, mundo_x, mundo_y, ancho_px=128):
-        """Elimina obstáculos de agua en la zona donde se colocó el puente."""
+        """Elimina los obstáculos de agua bajo el puente y convierte
+        esos tiles en transitables (tipo 1) para que se pueda cruzar."""
         tw = self.rect.width
-        zona = pygame.Rect(int(mundo_x)-ancho_px//2, int(mundo_y)-ancho_px//2,
+        zona = pygame.Rect(int(mundo_x) - ancho_px // 2,
+                           int(mundo_y) - ancho_px // 2,
                            ancho_px, ancho_px)
+
+        # 1. Quitar obstáculos de agua dentro de la zona del puente
         nuevos = []
         for o in self.obstaculos:
-            tx,ty = o.x//tw, o.y//tw
-            if self.mapa_celdas.get((tx,ty),0)==3 and zona.colliderect(o):
-                continue   # tile de agua bajo el puente
+            tx, ty = o.x // tw, o.y // tw
+            if self.mapa_celdas.get((tx, ty), 0) == 3 and zona.colliderect(o):
+                continue  # se elimina
             nuevos.append(o)
         self.obstaculos.clear()
         self.obstaculos.extend(nuevos)
+
+        # 2. Convertir esos tiles de agua en camino
+        tx0 = (zona.left)   // tw
+        tx1 = (zona.right)  // tw
+        ty0 = (zona.top)    // tw
+        ty1 = (zona.bottom) // tw
+        for ty in range(ty0, ty1 + 1):
+            for tx in range(tx0, tx1 + 1):
+                if self.mapa_celdas.get((tx, ty), 0) == 3:
+                    self.mapa_celdas[(tx, ty)] = 1
+                    self.imagen_mapa.blit(self._tile_camino(), (tx * tw, ty * tw))
+                    if ty < len(self.Tiles) and tx < len(self.Tiles[ty]):
+                        self.Tiles[ty][tx].tipo = 1
+                    if (tx * tw, ty * tw) in self.water_positions:
+                        self.water_positions.remove((tx * tw, ty * tw))
+
+    def cerrar_paso_rio(self, mundo_x, mundo_y, ancho_px=128):
+        """Vuelve a poner agua (tipo 3) donde estaba un puente ."""
+        tw = self.rect.width
+        nc = 5000 // tw + 1
+        cc = nc // 2
+        cf = nc // 2  
+        ancho_cruz = 3
+        tx0 = (int(mundo_x) - ancho_px // 2) // tw
+        tx1 = (int(mundo_x) + ancho_px // 2) // tw
+        ty0 = (int(mundo_y) - ancho_px // 2) // tw
+        ty1 = (int(mundo_y) + ancho_px // 2) // tw
+        for ty in range(ty0, ty1 + 1):
+            for tx in range(tx0, tx1 + 1):
+                en_cruz = (abs(tx - cc) <= ancho_cruz // 2 or
+                           abs(ty - cf) <= ancho_cruz // 2)
+                if not en_cruz:
+                    continue
+                if self.mapa_celdas.get((tx, ty), 0) == 1:  # camino del puente
+                    self.mapa_celdas[(tx, ty)] = 3
+                    self.imagen_mapa.blit(self._tile_agua(), (tx * tw, ty * tw))
+                    if ty < len(self.Tiles) and tx < len(self.Tiles[ty]):
+                        self.Tiles[ty][tx].tipo = 3
+                    if (tx * tw, ty * tw) not in self.water_positions:
+                        self.water_positions.append((tx * tw, ty * tw))
+                    self.obstaculos.append(pygame.Rect(tx * tw, ty * tw, tw, tw))
 
     def _generar_flores(self,nc,nf):
         for _ in range(100):
@@ -394,7 +470,7 @@ class TileSetPueblo(TileSet):
                 self.mapa_celdas[(i,j)]=4
 
     def _generar_montes(self,nc,nf,tw):
-        # Tipo 5: rocas grandes — más difíciles
+        # Tipo 5: rocas grandes 
         for _ in range(25):
             i,j=random.randint(3,nc-4),random.randint(3,nf-4)
             if self.mapa_celdas.get((i,j),0)==0:
@@ -402,7 +478,7 @@ class TileSetPueblo(TileSet):
                 self.mapa_celdas[(i,j)]=5
                 nombre=SpritesExterior.ROCAS[(i*13+j*7)%len(SpritesExterior.ROCAS)]
                 self.sprites_mundo[(i,j)]=nombre
-        # Tipo 6: piedritas pequeñas — fáciles de minar
+        # Tipo 6: piedritas pequeñas 
         for _ in range(35):
             i,j=random.randint(3,nc-4),random.randint(3,nf-4)
             if self.mapa_celdas.get((i,j),0)==0:
@@ -582,8 +658,13 @@ class Aldeano():
         sx=int(self.pos_x_mundo-ref.camara_x);sy=int(self.pos_y_mundo-ref.camara_y)
         self.pantalla.blit(self.getImagen(),pygame.Rect(sx,sy,self.rect.width,self.rect.height))
         if not self._fuente:self._fuente=pygame.font.SysFont(None,16)
+        # Nombre con contorno para que se lea sobre cualquier fondo
         nom=self._fuente.render(self.nombre,True,(255,255,255))
-        self.pantalla.blit(nom,(sx+self.rect.width//2-nom.get_width()//2,sy-16))
+        nx=sx+self.rect.width//2-nom.get_width()//2; ny=sy-16
+        nom_borde=self._fuente.render(self.nombre,True,(0,0,0))
+        for dx,dy in [(-1,0),(1,0),(0,-1),(0,1)]:
+            self.pantalla.blit(nom_borde,(nx+dx,ny+dy))
+        self.pantalla.blit(nom,(nx,ny))
         if self.estado==self.SALUDAR and self.dialogo:
             f2=pygame.font.SysFont(None,19)
             t=self.trade_offer
@@ -769,9 +850,14 @@ class Personaje(Sprite):
         self.pos_x_absoluta=self.camara_x;self.pos_y_absoluta=self.camara_y
         self.inventario=[];self.max_inventario=12
         self.recoger_activo=False;self.interactuar_activo=False;self.construir_activo=False
+        self.demoler_activo=False
         self.modo_construccion='casa'
         self.recursos={'madera':0,'piedra':0};self.construcciones={'casa':0,'puente':0}
         self.trades_realizados=0
+        # Contador acumulado de TODO lo recaudado durante la partida.
+        # A diferencia de trades_realizados (que se resetea cada fase),
+        # estos totales nunca bajan.
+        self.recaudado_total={'madera':0,'piedra':0,'items':0,'trades':0,'construcciones':0}
     def get_pos_mundo(self):return(self.camara_x+self._cx,self.camara_y+self._cy)
     def dibujate(self):
         pygame.draw.rect(self.pantalla,(255,255,0),(self._cx,self._cy,self.rect.width,self.rect.height),1)
@@ -803,6 +889,7 @@ class Personaje(Sprite):
         return None
     def muevete(self,obstaculos=None):
         self.recoger_activo=self.interactuar_activo=self.construir_activo=False
+        self.demoler_activo=False
         for ev in pygame.event.get():
             if ev.type==pygame.KEYUP:
                 if ev.key==pygame.K_LEFT:self.vel_x=0
@@ -820,6 +907,7 @@ class Personaje(Sprite):
                 if ev.key==pygame.K_SPACE:self.recoger_activo=True
                 if ev.key==pygame.K_e:self.interactuar_activo=True
                 if ev.key==pygame.K_b:self.construir_activo=True
+                if ev.key==pygame.K_x:self.demoler_activo=True
                 if ev.key==pygame.K_n:
                     t=list(Construccion.RECETAS.keys())
                     self.modo_construccion=t[(t.index(self.modo_construccion)+1)%len(t)]
